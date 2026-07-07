@@ -1,25 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-// ============================================
-// SUPABASE CONFIG - Your credentials
-// ============================================
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://rgolcprnbzrqleurebah.supabase.co";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb2xjcHJuYnpycWxldXJlYmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNjcwNDUsImV4cCI6MjA5ODk0MzA0NX0.PQfamuJYqcm1LWFSv_yhib8anMe4QUWzETwNJ35FBaA";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ============================================
-// CONSTANTS
-// ============================================
 const ADULT_CONTRIBUTION = 50;
 const CHILD_CONTRIBUTION = 25;
 const POT_PCT = 0.7;
 const EF_PCT = 0.3;
 
-// ============================================
-// UTILITY FUNCTIONS
-// ============================================
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -47,7 +38,655 @@ const emptyData = {
   removedLog: []
 };
 
-// ============================================
-// LOGO & BANNER (your original images)
-// ============================================
-const LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANwAAADcCAYAAAAbWs+BAADziUlEQVR42uz9d5gd1bEujL+11urunScnaZRzzkQBIoNMMpjghDEmGts428cGSzLYxvE4ECxMMsYGi2ibnCQhlCWUszSanMPes2N3r/D7o/dgzrk+5577++73XXzP1PPokWY0M3tP96quqrfeegsYtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtmEbtv93zRhDxhhatmwZM8aw4t80fGX+eWz4Zv0fdqCnn36aDX181VVXGQD6f+drLFu2jO3fv5+uvPJKAMCVV16picgMX/1hh/tvYatXrxaHDx8mALj55pv9/+xrL7roosiMGTOs0tJSFgqFzNy5cytDoVCFZVkRz9OcMa3T6b7W7dv3dOXzeerv79e/+c1v8gD+05+7cuVKCwBuuukmRUR6+K4MO9z/FbZs2bL3o9fy5cvNv48sxpiS119/fc6GDRsixsj47Nlzzw6Fwp8tFAp2f3//QDKZPJAaTHURyItGo8y2LVsIEeKcE0BwXZcV8vkCgXme8gEgVFNTM6G0rGx8yHEsMibV0tH6o6PHGo+EhEieddZZ7qWXXrq+UCj8D5F2+fLl9B+9z2Ebdrh/iij27yPYo48+Gpo8efLNTU2Nsw4dOZwcUTfipIkTJ57a3dX13p49u5+z7ZAcOXKkN3b8WIyoHdE7adKk/ZZldQJwAeSFEFml1H/4upZlob29feGx48dPbGpqCh89fJClUmknFAolpkyZ8pXKykq+b9++N7p7uxvmzJpjj5s06YmTFi58+x9FwMmTJ5szzzxTDt/NYYf7UNZiQxECAFasWKEB4FDzoZEvPfPS2HETxt3qe9457+3c8dKMydPGjhxTX55KDT7R0dndMW7iOH/SuInzAGZr6cEYk1XGDJAxOWgw4mLAtnmSa903esKEA2vWvPPV7t7uk6LRaPPC+fMfr62t3bhy5UrrzTff1E8//bQGYP6D91jxs5/9LNbU1FS6ZMnpFxqw27du3XosGomUTpo0qa6lpeVLRLTvG9/4xhEiyv77CL1ixQrzH/3sYRt2uP/PHO3BBx8U/z6SPffcc1/Yt29f9cRJE29gjB0/cvTIq2eccWZVyA4NdHd3p0pKEguI88sVmZAxGmTgOcJpsmx2WDDRyTmlmLD7BGM9CuixHWcgEYl0b9myk1KZ5B8H09m/tHd2HD7/3HNn5dPJJ84+++x9RARjDFatWsXHjx/Ptm/fDgDYvn07Dh06ZNauXfsPo9W2bdvOO3DgwFnv7XwvMm/OvC/29vbuTSaTr5577rmNp5122n0fPCsrV64UN910kxxOOYcd7v/z67Zq1Sp21VVXqaLjiTvv/Pa0uXMXrTx48ODAxIkTp5SUlOxpaW9/ct7s+dcNpgYpXyjUVFSWzbMdG17BRcFzAcGMsIThjFIC4oiwRJvgvFMI0ccY67MF9TFm9SulBsePH9/56/vvr29sav/jpBkzalPpjOnt6kxNHjPixptvuOHZZcuWsaHI+l+JwsuXL8fy5cvxwe/ZsmXLlGeffXbk5MmTl7e0tIyEMf6UqVN3rV69+juP//73xwquCwBYtWoVv+qqq/RwxBt2uP8vQBC2YsUKCQDHjx+vfeONNz5TWlp6cTI5IMLhyKGx4yeP6+js3peIxz4zmErxcDhkx+JxGK3gFvKSBDcW54wxwcEBYQsQYwUhRIvNRYNgvIEx1k9MDFoMfUTUB4Ek8nAnjh3Z+ulbPr/1eGd3TXllJcLQvdddeP6EF9atywPAggULAADt7e3qP3O+f+eIbPv27XGlVHjCqFFlFXV1RwCUNTU1xTZv3nzm1q1bT62pqfnk8ePHX547e/bmG2+++QEiGgSAM844QyxZskT/V19r2IYd7n/F2cSQo91zzz31o0eP/pdsPjuiNFE60rbDD5WUl5/T09tf4XveWZnUYFcsHqsJR8IAwTAiIzgHGBjjDIJzcOIAJ8OFMNzmjEAZi/gxIfghm7PDwgk3hcLhzkQikSyLxwsAPAD9ALw7v3fnkwOpwd57f/Wr64go/4/e74IFC6whJ1ywYME/dEJjjBgYGIhms9m4UioxZsyY5JtvvvkZrfDxspL4QKwk8edp06a9uXbt2oo/Pvnk7CkTJ/40OZjqGlU/6s329vbvrlixov/fX5thG3a4/0cRbcaMGTSUOj7wwAMjQ5HINb7r3lBVVbXDsiKbFHA2iC0eHEyWJxKJQn8qdYe2Il2VYft3g4PJUCKRgIEBJwIjAhMExhkEsyAcC0IIkM17Q8I6EA47G0pipQdsIN6f6qtrPt7UfujwoVxHR4cZ6Go17e3trL2nLzdm7AQnFAqh8XizTJSVRWpqalBXV4cpU6Zg3rx5asaMGa8SUcf/cLOLdd5NN91kLViwwDr//PNLIpFILJvNxmKOw4+2tk7saO+6a++B/feycMy9+Kwzrvby2bdKy8sL1dXV/Y2NjU0dXV2L33rjjZmWbV2eSqe+etstt62aPn16BwBceeWVfNWqVcON9WGH+/8LEGFDTeGVK1dW+kqtKE3EZyRKSo+HI3GRTOUsYbGrC/kCiAGe56G5s7slVlp+TNjOkuaGI4UwjHPSSScgl80R4xyWELAdywuHbUOgjCflPjK60lf+tN6unvaDhw/v6+3t6wzZ9ohEPL7Qsu3SeDyGkMUREQQCwMNR5F0J13MhPR+pdBoF13U9z6NMOmNprai9vX1TLpcvlJeXh0ePHm1mzZol29vbv/Htb397uzFGAJAAajv6+uJ9HR01nPNR9fX1x7Zs2nT36m276sLxsnA8Fhvd3dzQdeKC2ffPnD7dJJPJUYKxcVL6LRUVlT3rNq3f29bSdlNvTy8vLyvfazv27V/72tfyQ/Xi/0Ono6H6sFib/l+DkA473D9wtKeffpquuuoqdfhwS/3+g9s/3t7a/ony8tIjtfXj93Z1dX8yn8tPjCcSLJPJ+JwzbgDm2Daefv55pAt5CCHkscOHxedvvBFjRo8GEfkhJ6QEVKi3t7uj4BbqIrEYOto78keOHPmTEw7ThPETKiZNmLAkYvMdh9/b8vt8qkNNGj1iXjRsz9fkzA7HYhFijBU0Y30FdjhRWr6urKzETw0kjx1taumLx2KuJUR3Q3NzVgjB6uvrr21oaKh59913eWNDgzV67NgTKyorK8pKS+F5hTW7du154Mc//rG9aNGiDgD5puPHF3uF3Mjv3HXPlzp6B8AZzJi6Wn/F97793VzOHSelLFFKlWkppxZctz4SifSFQ6E/dHb39v3tb389N5GInQPQbcuXL3+ciDJXXnklnz59uvnfWd/9z4ChYYf7J67Tnn322Y8wYIXlOG9JsAE7lJiXHkxd5XoFEACttSIiTsWraFs2srksXnjhedPX16c/evnlcv7cuf35bDqmtYzv37tn0LIsU15emdt78ODPSkpL+y4577yRpAojm44cLuTTg+F4PH42ZzRZ+QWQKsAd7EVBC23s+LNJT15hkc9gJ/KDrn4kHE/cMqG2mkeiUfSlBldX1oyY7ghm2bZ11Ghd8JU6bIzpLysrGxg/fvzOQqGgXnjhhdHfufPOwsxp084aM3bM9blcDt1dPdtPOGFR42mnndZ78smL/npw36FvPvToI3Nt2wldffXVz5eUlKSy2WwFwEqk9Oq01mVKqjJDJiK4hVw2l6morPrj7t27jx89eugrAFqEENctW7ZsnzHmf6m+M8aQEMLIrq5Et1I6k8lwxtj4WCx2tLKyMvN/Q6o67HDFG12sccwba96Ydfzw8R+VlpbGqmrqXuvs6j9ZEzvHduxwNjMoiTEOAwIZkCEQDEAEpTWi0YhfV11tXDc/2NfbDQIq1294d/WIESP6Zsya1dPb2f3m9AmTxzKur+7u6oynksl4aSJWzwmQrot0KgnlFyQHNJFWOYoIZ+LCP6TSuZHr1rx17oKpIxGOVbwYqhk58Opf/3LNogn1YsLUqZsrRo57dd36DV+P6kJkyeIT1+ddWcPIlGttIlobbaC1lKorFAr11tXV7Rs1atSqXbt2RZ599tnOeCJx+5rVqycwzidMmzq1JJGIPfWZT127dtTYsXV79++dnsvm5sMgD8DSSlcrpcqU1pZUClpqBWO4sGwQUUNtXe0vnn56VVkmmz6fM955+fnnfWnhGWd0LFu2jP17yljxmtPy5csBLEd5+a+t/v5+PxEr+UtJaUXJ52649szG1tbzNm5+79lXXnp5cN68mawsHrut8brGZ5esWcLWrFmjsXw5sHz5+/fxnyH6/bd3uGJPSQHAb35z/5fDYfsrlZWVz2lYcanM5wqeD2KAVEoREYcxICIQEaRUYIzg2JYfjUYYtORHDh3SXDCTSiYfr6utPXTiwgWz2lpbjjiOcy0ZM34wlQKIYFkCWmv4hbyvvALzfZ9xGBJaQksPBImmzn5sbEni4MGDSKdzuP4zn8ThIw3Yc+AwBnra8dlPfcL0DuZo9749OLT/gPrEZRfxW2+8fnsyk9OcIDSIAygwxjQRMaVUue/7ZTCoIEY6Fo1tZJy9Ulddd2BgsCf7rW99d2o8nrgpEolM7+zsePqzn/0cTZkyqSGXy12azeVGASaipNJSaqaUhlYaWiujAU0gHo1GobV+246ENvzl+WenxiKRmYyxe+68887fD6XrawC2Juj//cOo9/lbvrxh/Phx4uvfvP2Eww1N523ctOW11155BY5j46zTF/d8+tpPVQ9HuH/yFHLfvn1jtm3bfp/nuuHa6vp1PBS6rK+/f470pOa2DaUVBSiAARFgtIE2xiTicSMYEA3ZbO++3Z6vzNra6poDYU5vTZ4w/ltdnR0Ot8SCcCSCTDoDow1C4RDC4XCQliof+UIebiGvlJSe0cZlRkqpjZJSAsT0K2vfpf2Hj7D5i05Ss2fM4N3d3WzPnn321ClTEmPGjEYml8aWLVvAGcNF553bN3nKlEwuV4gTka2M1gxUYOBJw0yWYMIwxiIiY7QBQGENU0LE+pU2jXV1NQcqKytX33XXXU1MiJ8d2LdvxPQZMxLjJkzYPH/+/EGL80V9fX0TfNeH1jBKa9LGwMAA2kBrrWzb4UQw8UTsNzt37Fpz8OCenyYSJX+54IorfnbGwoXvI6cW52hp65nd1tYKABjIDAgv68u333rrsVGjR2Vvv/3zpzU0N5/+7rub1rz15tsyHA6LsaPrW+M1dRdNGDWKSiIRE4vFKJPpT0lJJcbAP/30k/bDGMKHOPX87+pw76Ng995779mlZWV/joYiD1bWjUw3NTZ9PxSOCF9JZUA8m8kiFA5BGw2tDLQxCDm2X1GasHp7OtDX24uO9s7l5597bjdJz1KQlwguzlZSIhqNolAowHZC0FqnQTjOCAcNs/dzZvXbnBdEJNJn29GeiBUf5KVlyXgZ8rFgvMYAUABE8U8egA3AARBr68Lo5EBbVAgeBlMV0vN4WaJ0R2/vAPl+oUJrb6TW/ijBzUgCTZTajDPGRKB1vPjQ6OdCNBHxrIaOAAhrrZmSKlZaWrI/nkj8vmbUqL1f/dIXLurp6Tu/uqr6xLHjxr+3+NRTKJfJzU2n004AHZIxBgQiGK2gldKMMWZZNhIlsUbS+ucvv/ryqGgsdtWt119/4YGu/rOOHj06tmLchPGtx49fcey9rbAtG57rIpMZRDqVwUknnfzS7V+86aKm9p6Fb73xxub169ezcCRk3nzrDZo4aTJGjh6DgtRIJBIYP3lK06yJk+Lr163tXPYvX5+xbPVqseJDTLoW/x17a8uXL6fly5ebWXPmPJPs7/dqamu/lExmbs/n8idwwU3BLRgRDnMwgeajx5EIO6irqYHlCBOyhRakrU3r1rZq6HcnjB371IkXLb00PZj6aFV11RwCkEylTCSWSHKOo2UVZWu01s8246Q9lyx0coCBMV4U2EfASwTEBQonnlhwOy9SsrCAdecSSTdJSnoEGGjlGmZ8A63Id1PGzQ8aZaTm4XKvPFyuHSemLRFVFAq3KGP1jKg5sBo1xgWu5MDICIBBAOm/bUf5COybKkThfDfvnaWhZxqlZoJM2hhjGGPdFufdjmU1F1yXF3p6Pt/Z2dn1ldu/squuru6bd9xxR92RQwd+fWDfnsTiU0/rGztuQrrgevXpwcEo58Joo4gLoYm4LngFRiA1mBocq7S+J5Eo29zR0T72r6+9ubpzMFNbU1UN43uIhMODk2fO6n/l5ZdHFQYGMJgelFVVNXYoEiYAYCS5BpgQ3FiWQDqdRnNzs+KRqLnwwo+k2nu6SwY9TwmbuRs2bxoEgDVr1nyoz5/4b+ZsYsWKFXLFihXi4UcfXp3sH0hOmDLjvd7unvsYF6W9/X0eGdjhkINDjY04frwZHR3t0J6vv3zbLZnkQG/i0L59vKenc/kZp53ROrKmpj5XKLwghEBFdRUKrrfHsq3XqkeMfyc0avzWcTHqLNYu4ye1/e3a5vVfZCxcNrfvyMM32kKikAOU6YcxL0L5Lrx8Bn4+BellIWUBWuYAlQc3CsxISC8H6RfALCAUjcMP23AtBqM4tC9gyLq+3wlDHEpAsgOwIyOQL+i12YFDfzhxwmJdWn9u1kmcdidM/s60MdXH9+9fks9kJgvOTiZQtQYr96XiIJazLN4gGAtlBgenN7ou/eQnP9kkhFh4xx13LH3+heeumj5z1gVTps1omzRhYm97e8eofC5LPBpTnIe8PYf2ifKIzceNrjfhcCS6efPGsw4eOqRBqC24ngrPnivLq6sLue6uZFN7W2k2leRjRo8y6UyGe65PwgqOJRdCGa2UhuHaGBNyQqiqGcE5c6RUSqR6+8Tx41tHnTB5gojaoaP/DGfwv43DrV69Wpx55ply8+bNM959990f1NXUbTQh25Ja3aWMhpJaM2I2CPCVxLiRtdi/Zy8G+7v01ZctZc3HDyVa2zu2jR837vcnLpi/yPO8ZU4kQnnf3+uEracyMvbcSadMPgyA4RVi7d4jV2QaHr214/h61bj+K7NG1lWXJxIhZDLdaGraiUI2rQv5NJQ7IGVhELKQMyHbckoTMTAuQLYDxwmDCQvpjELBMymDuNK8HFBcF1xHCk2K4CutiUhpJlVeGD1gQzUCzCopiTosFrHPGJWInGEProF3ZDd2PnfedxPV4/uzR36/Z9b0vm8BXzUA8Ld2sNq2rTNsS3zGk3KRkphIlmhzPX9MR3fPiZ1dPbeFHDt8xeVX/Onuu+/+zuLFi39w9PDhP0+cNHn0qYtPX5OIR0/+8wt/DeV9bbW3HMe86VMxbnQ99fX1mv379xkQY2S0cSyLC0Zk2/a6t9esOefw3t0oK00gFImQhIFb6EMmkw0OpzDaGK1giBMxCC4QjUXQ39spfviDu0tsITB23DgufUVS/nMwy8R/l8h25plnyjfeeOOrW7duvXbixIlfpXj4atLmpmRqwCMiyxgwkAGB4GsDR1jmmssuRH9/D9uzZ+++qpoRj1952WWlrc3NPxOcOeHS0hesUOzB0+bOfQUACt3bLjry+tdPoXDlD4z1xRq/9W0UQjYIAun+XmxrPFzIplMmn0kx42cd5WaY4BpVNbV2tHIqwomR6O5PHXYLPeujlZMpXjlVl1ZOyMYS9flQ3ax3olbVSzmZB0AIswhyKmMDSAAoRVDzZQGkOFm+hoQxZjIyDZ/Q/YejPS1bVMvRd5HL7I2V1J90a1U0wwY7nlnS0Bb6YrTkTgz09d93+rip60sWfXEvEX3BGEMNDe2LB5OdZ0jpz+NCdNqO00GCuX39fdPfXffuO3/84x/visVin7nlllvO7+ho+/rCBYuyS05bPPCHP/2pZFRtDZs5YyayuTz6+3qpr7+Pqiqr0NvfR5YdBiOmCp776LhxY892k92mvLKGKaMAYgAX8FkALUhJRJwTGEFKCV8p+J6H+bPnIBGLm+amRlq8ZImMxCJ2LpsOvmk4pfw/a7/61a+c22+/3X30949+78CBA7eOnTzhy6HS+M9815+XyWS1JtisCKGYoKuGiM1lprdNbNi12yutqnnmko9+7J10MnVuU3v7FfGS2MZpC5ZcVZkItxqZL2nb+dBv081rpnXs/t3pAgX0tR+FNBye5xkvl9Furt/3s10UFiokhEDIhFHgUbdu6mIWKp/QlGre9NXJEy7tL194C5sINBJPtEBvAgD8de+625oaDs3btfrP15z9m0tu6B7s5K2ZDgNCaMoP55bYlojZVihhACmlyuX8fLrmrjG9IRHVU3+yqGBb0czIijo9uWYGTjr5u6irOuPP9TH8MeYdH8VaNyq0bzR9WfYvqpC+rrNp822tx3dg16uf2dy695ED45/53I10V3gd9P/IjX7ttdcfbm5u/o4lrLaf//SnP33x5Zcv+tOf/nTTqaedfsltN96ATCZt+vv6KRaLoaOrC6lkChXl5XDdAgwxCMEpYlkh7bmGMUZKaxgNSClBQiAcjQEAlFIWJ2aByGitAWNgC45wKIQRI0dRJBpDbd0IPZgtGM7ZcIT7MES222+/3f3d7353p/LkJ6fNnvEtbfGHcrlsTLsy6KuRhmGAUQbEORzydfOxA6KtrStdVj3iBzd99oa+9q72JSquo0tOW0xACEdWf3fJ3hc+//Dxlz99pptrsSQDupry0piQMVpx42WN9DJcFdK8vKyMl4yah+5+d3e4bFxzxbiz+sKxmq/VTz+vz6IIPJ2Zct+m56u+cHVcf+PSLz7++Uc+c+qO1t2mNdPOb3nmUxzch+t58KQHaSQUNKQx0L4EjAKUDjBX4gDnsC0LTDFwxmD5Am3Z/djWvBqrdq6ELuAGUzA9oxJj3ROmnkYFq/bhcCT6o2vP+BSdFJ/UP7Dnt9e0Nb42MtW+9tqqTy2/rnGp2lNRmvihmPz1TWGiRmOMfeTIK8R5/Y+PH++42LHtkvaOjl8sOX3xyzfeeOPPvvGNbxx78Lf3f+ziSy4dVV1d4ydTSaupqRFaaxQKebiFHMLROIQQYGTceEkpGzdluspks9zzCijks9BSw3MDJ1eFAmecwZe+YRAkOAdnDCQsjKgfkSstLyUmnHamVci2bSe460sArB12uP9Tke3++++/02j9uWlzZ91tbPaz/v6BmFZagYgzY6BhoAFYjmPcwRZ/9+7d9qZt+359zz0/PUSQFzc2NTx50imnfAoAuvasurb/0DOXIrXtcvhJpO0QlB1Wvu/BicaYn81JYUvmOAIFrxLhCWdrz/WXxSadc3jhqbetyudWA3gExzPd8+579f6fP/Tmo7jg+0s/lUeOV5TH8dOXfwwYDTgMEAKA1mDQ0AwACwT0DAGMAC4IXADQBGMA0gZMw+MFA26C9Iw4oAnQDMHXQHBCVU97F95rXA8eD32vLlqNAwdfQq5A2ybUT1970dw7n/jE5Pnfg/f2nKrsmpNIpp/sfPeLLR17Vr6NVy68efLSV10Ah9esWXOdW3CfDIcjzclU+oLt27ef9f0f/vDmsfX1/+qEQ2unTp46bvqsuaq5tZUDgCcl8gUPcWMQikZ1Lu9OnzZ7zhaEwpUvvfS38SbVbwTjyHp5QBNbuXKllc7looYRXCmNxTnjloBUCjmgcPaF5x16b/+hKS0tbVUjS8IWMWoajnD/h+ymm26ybr/9dvfee++9g4g+O2r6pJ96pH+TT2VDRmsDgA99LQdDyOb62IGt1NLQYMMqv//3v3/0WGtz6/xsvO668+bP7GpYd+/N2b5Dd/Yc/MPIitooMjriO7yMSy9PShYI2iWSGRoxqs7uG3R6I5VzdjmR8d+YvujjR4kobczDiR+/mD21s6PtlrbBto+cfNuJDpEf6c30we/NAxI+LJsisUqWiJZRwo8hzKJUFkuwaCjCHGbDYjYsboOBGWaRYYwRGCMSDMZoEBRyKoO0TiOpM0iqQaS8ASRzPUgXBgEZqEAoJsDtsGGOgM4q3drfZVqPNgMWLWw8vnfhmtUv4NsUa7xw4dL8yFHzHzln8uiLThmRnZbv3nVBz6iL9+Z7bv9zd0f2kTGzl7y8bu3an2Xz2WvKy8qala9C+3bu+v3aNWseTpSU3PD9u+765pG/PX9+Z3cXiEhLz2fKaLj5AgqFglVSYU9/7LEHp3b39oRSg0nMnjqViHHYTgjx8or8DR+7yDfGdO85dBTRaAKOYGCMIRQO473NG+1de3bPLLiexdyCWTDp80RE8p8gwP3f53BDke0nP/nJd3O53GcXnXHKTyDYz3OZXEhprcE4YyqIa4wJCNJq/3tr+c6de+W5F1z1rxecu7i3o3dAnXzqaTccX/OzM5ve+sKrurB+bqJSQMTHG98oJXzf0tJVtg1i5LNQJIw0G/seSmb+acJJX30lkaD9AEMmc8m8b/7hjs9d8sOPXd5T6KnbtG8zkHYBjwEU9mvCdairqBHV8VqrJl6N8ngZSuIJxMNxcMtG2AlBCAFjNKTR4JzBMBDjnIamVbhlIRQKQXABIawhOB1ggG9c9BcG0JFuR0uqGU39x3Cw5yBa052k/AygiUMJTaFSIxSXPZ15Y3KDnKFn7IMNv0K0NPHTtybOR0nNmD9eceIVz37mhJmbgMaliaz1QsvRNQ/1uPZTu7cevGzb9u1TJ02c6I6qr98Jo8/MpFNLHn7ooesvvPC8+0qikb8aY4gYyUKhAO44bPTo+kyitnqWXVOVaN++EfUjRwHEIKVk2fQgdm7ZMO/OO5c9+KOf/KS2qaUNbW2dPBJyjNaKBOMoj8fYutVvsbzr4bJrPikrqqq4KBZxH3J/+7+LaTLUZ3vyySe/u3fv3i8sPuesb4YTkZX5XC6spNIGYNoYQMogyClXHdn5Lt+x61DjGWdddNaNN1434r1G3T9frvKPNu1+IhwbXFhWF+cuD0ktDXezWQAc0h3UMeR
+export default function SusuTracker() {
+  const [data, setData] = useState(emptyData);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("overview");
+  const [memberName, setMemberName] = useState("");
+  const [cMember, setCMember] = useState("");
+  const [cMonth, setCMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [cAmount, setCAmount] = useState("");
+  const [pMember, setPMember] = useState("");
+  const [pMonth, setPMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [pAmount, setPAmount] = useState("");
+  const [eReason, setEReason] = useState("");
+  const [eAmount, setEAmount] = useState("");
+  const [eMember, setEMember] = useState("");
+  const [notice, setNotice] = useState(null);
+  const [syncedAt, setSyncedAt] = useState(null);
+  const [recorderName, setRecorderName] = useState("");
+  const [nameDraft, setNameDraft] = useState("");
+  const [editingName, setEditingName] = useState(true);
+  const nameInputRef = React.useRef(null);
+  const lastKnownUpdatedAt = React.useRef(null);
+
+  useEffect(() => {
+    loadShared();
+    const interval = setInterval(loadShared, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  async function loadShared() {
+    try {
+      const { data: result, error } = await supabase
+        .from('app_state')
+        .select('value')
+        .eq('key', 'susu_data')
+        .single();
+      
+      if (error) throw error;
+      if (result && result.value) {
+        const parsed = result.value;
+        const remoteUpdatedAt = parsed.updatedAt || null;
+        const isNewer = !lastKnownUpdatedAt.current || !remoteUpdatedAt || remoteUpdatedAt > lastKnownUpdatedAt.current;
+        if (isNewer) {
+          setData({ ...emptyData, ...parsed });
+          lastKnownUpdatedAt.current = remoteUpdatedAt;
+        }
+      }
+      setSyncedAt(new Date());
+    } catch (e) {
+      console.log('Loading error:', e);
+    } finally {
+      setLoaded(true);
+    }
+  }
+
+  async function persist(nextRaw) {
+    const next = { ...nextRaw, updatedAt: new Date().toISOString() };
+    lastKnownUpdatedAt.current = next.updatedAt;
+    setData(next);
+    try {
+      const { error } = await supabase
+        .from('app_state')
+        .upsert({ key: 'susu_data', value: next }, { onConflict: 'key' });
+      if (error) throw error;
+    } catch (e) {
+      setNotice({ type: "error", text: "Could not save. Your last change may not persist." });
+    }
+    setSyncedAt(new Date());
+  }
+
+  const memberById = useMemo(() => {
+    const map = {};
+    data.members.forEach((m) => (map[m.id] = m));
+    return map;
+  }, [data.members]);
+
+  const totals = useMemo(() => {
+    const totalCollected = data.contributions.reduce((s, c) => s + c.amount, 0);
+    const potIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? 0 : c.potShare || 0), 0);
+    const potOut = data.payouts.reduce((s, p) => s + p.amount, 0);
+    const efIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? c.amount : c.efShare || 0), 0);
+    const efOut = data.efWithdrawals.reduce((s, w) => s + w.amount, 0);
+    const efRepaid = data.efRepayments ? data.efRepayments.reduce((s, r) => s + r.amount, 0) : 0;
+    return {
+      totalCollected,
+      potBalance: potIn - potOut,
+      efBalance: efIn - efOut + efRepaid,
+    };
+  }, [data]);
+
+  const perMember = useMemo(() => {
+    return data.members.map((m) => {
+      const contributed = data.contributions
+        .filter((c) => c.memberId === m.id)
+        .reduce((s, c) => s + c.amount, 0);
+      const received = data.payouts
+        .filter((p) => p.memberId === m.id)
+        .reduce((s, p) => s + p.amount, 0);
+      const lastPayout = data.payouts
+        .filter((p) => p.memberId === m.id)
+        .sort((a, b) => (a.date < b.date ? 1 : -1))[0];
+      const efReceived = data.efWithdrawals
+        .filter((w) => w.memberId === m.id)
+        .reduce((s, w) => s + w.amount, 0);
+      const efRepaid = data.efRepayments ? data.efRepayments
+        .filter((r) => r.memberId === m.id)
+        .reduce((s, r) => s + r.amount, 0) : 0;
+      return { ...m, contributed, received, lastPayoutDate: lastPayout ? lastPayout.date : null, efReceived, efRepaid, efBalance: efReceived - efRepaid };
+    });
+  }, [data.members, data.contributions, data.payouts, data.efWithdrawals, data.efRepayments]);
+
+  const autoNextRecipient = useMemo(() => {
+    if (perMember.length === 0) return null;
+    const sorted = [...perMember].sort((a, b) => {
+      if (!a.lastPayoutDate && !b.lastPayoutDate) return a.order - b.order;
+      if (!a.lastPayoutDate) return -1;
+      if (!b.lastPayoutDate) return 1;
+      return a.lastPayoutDate < b.lastPayoutDate ? -1 : 1;
+    });
+    return sorted[0];
+  }, [perMember]);
+
+  const isManualNext = !!(data.nextOverrideId && perMember.some((m) => m.id === data.nextOverrideId));
+  const nextRecipient = isManualNext
+    ? perMember.find((m) => m.id === data.nextOverrideId)
+    : autoNextRecipient;
+
+  function setNextOverride(id) {
+    persist({ ...data, nextOverrideId: id || null });
+  }
+
+  function addMember() {
+    const name = memberName.trim();
+    if (!name) return;
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    const next = {
+      ...data,
+      members: [...data.members, { id: uid(), name, type: 'adult', order: data.members.length, recordedBy: recorderName }],
+    };
+    persist(next);
+    setMemberName("");
+  }
+
+  function removeMember(id) {
+    const next = { ...data, members: data.members.filter((m) => m.id !== id) };
+    persist(next);
+  }
+
+  function getMemberType(memberId) {
+    const member = data.members.find(m => m.id === memberId);
+    return member ? member.type : 'adult';
+  }
+
+  function getContributionAmount(memberId) {
+    const member = data.members.find(m => m.id === memberId);
+    if (!member) return 0;
+    return member.type === 'child' ? CHILD_CONTRIBUTION : ADULT_CONTRIBUTION;
+  }
+
+  function addContribution() {
+    const member = data.members.find(m => m.id === cMember);
+    if (!member) return;
+    const amount = getContributionAmount(cMember);
+    if (!cMember || amount <= 0) return;
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    const isChild = member.type === 'child';
+    const potShare = isChild ? 0 : Math.round(amount * POT_PCT * 100) / 100;
+    const efShare = isChild ? amount : Math.round((amount - potShare) * 100) / 100;
+    const entry = {
+      id: uid(),
+      memberId: cMember,
+      memberType: member.type,
+      month: cMonth,
+      amount,
+      potShare,
+      efShare,
+      date: new Date().toISOString(),
+      recordedBy: recorderName,
+    };
+    persist({ ...data, contributions: [...data.contributions, entry] });
+    setCAmount("");
+    setNotice(null);
+  }
+
+  function addPayout() {
+    const amount = parseFloat(pAmount);
+    if (!pMember || !amount || amount <= 0) return;
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    if (amount > totals.potBalance) {
+      setNotice({
+        type: "warning",
+        text: `Heads up: this payout of ${fmt(amount)} is more than the pot balance of ${fmt(totals.potBalance)}. Recorded anyway.`,
+      });
+    } else {
+      setNotice(null);
+    }
+    const entry = { id: uid(), memberId: pMember, month: pMonth, amount, date: new Date().toISOString(), recordedBy: recorderName };
+    persist({ ...data, payouts: [...data.payouts, entry] });
+    setPAmount("");
+  }
+
+  function addWithdrawal() {
+    const amount = parseFloat(eAmount);
+    if (!amount || amount <= 0) return;
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    if (amount > totals.efBalance) {
+      setNotice({
+        type: "warning",
+        text: `Heads up: this withdrawal of ${fmt(amount)} is more than the emergency fund balance of ${fmt(totals.efBalance)}. Recorded anyway.`,
+      });
+    } else {
+      setNotice(null);
+    }
+    const entry = {
+      id: uid(),
+      memberId: eMember || null,
+      reason: eReason.trim() || "Emergency fund withdrawal",
+      amount,
+      date: new Date().toISOString(),
+      recordedBy: recorderName,
+      repaid: 0,
+      remaining: amount
+    };
+    persist({ ...data, efWithdrawals: [...data.efWithdrawals, entry] });
+    setEAmount("");
+    setEReason("");
+    setEMember("");
+  }
+
+  function addRepayment(loanId, memberId, amount) {
+    if (!amount || amount <= 0) return;
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    const loan = data.efWithdrawals.find(w => w.id === loanId);
+    if (!loan) return;
+    const newRepaid = (loan.repaid || 0) + amount;
+    const newRemaining = loan.amount - newRepaid;
+    const updatedLoans = data.efWithdrawals.map(w => {
+      if (w.id === loanId) {
+        return { ...w, repaid: newRepaid, remaining: newRemaining };
+      }
+      return w;
+    });
+    const repaymentEntry = {
+      id: uid(),
+      loanId,
+      memberId,
+      amount,
+      date: new Date().toISOString(),
+      recordedBy: recorderName
+    };
+    const repayments = [...(data.efRepayments || []), repaymentEntry];
+    persist({ ...data, efWithdrawals: updatedLoans, efRepayments: repayments });
+  }
+
+  if (!loaded) {
+    return (
+      <div style={styles.loadingWrap}>
+        <style>{globalCss}</style>
+        <p style={{ fontFamily: "var(--body)", color: "#EDE6D3" }}>Loading your susu circle...</p>
+      </div>
+    );
+  }
+
+  const wheelSize = 280;
+  const center = wheelSize / 2;
+  const radius = 96;
+  const n = perMember.length;
+
+  return (
+    <div style={styles.app}>
+      <style>{globalCss}</style>
+      <header style={styles.hero}>
+        <div style={styles.heroTop}>
+          <div>
+            <p style={styles.eyebrow}>Ledger</p>
+            <h1 style={styles.h1}>Brundige Family Trust</h1>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <div style={styles.splitBadge}>
+              <span>70% pot</span>
+              <span style={styles.splitDot}>&middot;</span>
+              <span>30% emergency fund</span>
+            </div>
+            <button onClick={loadShared} style={styles.syncBadge} type="button">
+              <span style={styles.syncDot} />
+              Shared with group{syncedAt ? ` · synced ${syncedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+            </button>
+            {editingName ? (
+              <div style={styles.nameForm}>
+                <input
+                  ref={nameInputRef}
+                  autoFocus
+                  style={styles.nameInput}
+                  placeholder="Your name"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { setRecorderName(nameDraft); setEditingName(false); setNotice(null); } }}
+                />
+                <button style={styles.nameSaveBtn} type="button" onClick={() => { setRecorderName(nameDraft); setEditingName(false); setNotice(null); }}>Set</button>
+              </div>
+            ) : (
+              <button onClick={() => setEditingName(true)} style={styles.recorderBadge} type="button">
+                Recording as <strong>{recorderName}</strong> · change
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={styles.heroGrid}>
+          <div style={styles.wheelCol}>
+            <svg width={wheelSize} height={wheelSize} viewBox={`0 0 ${wheelSize} ${wheelSize}`} role="img" aria-label="Payout rotation wheel">
+              <circle cx={center} cy={center} r={radius + 34} fill="none" stroke="#2F6B44" strokeWidth="1" />
+              {n === 0 && (
+                <text x={center} y={center} textAnchor="middle" fill="#A9C9AE" fontSize="12" fontFamily="var(--body)">Add members to</text>
+              )}
+              {n === 0 && (
+                <text x={center} y={center + 16} textAnchor="middle" fill="#A9C9AE" fontSize="12" fontFamily="var(--body)">start the circle</text>
+              )}
+              {perMember.map((m, i) => {
+                const angle = (2 * Math.PI * i) / n - Math.PI / 2;
+                const x = center + radius * Math.cos(angle);
+                const y = center + radius * Math.sin(angle);
+                const isNext = nextRecipient && nextRecipient.id === m.id;
+                return (
+                  <g key={m.id}>
+                    <line x1={center} y1={center} x2={x} y2={y} stroke={isNext ? "#C9962B" : "#2F6B44"} strokeWidth={isNext ? 1.5 : 1} />
+                    <circle cx={x} cy={y} r={isNext ? 22 : 18} fill={isNext ? "#C9962B" : "#1F5D3B"} stroke={isNext ? "#F3D48A" : "#4C8C5D"} strokeWidth="1.5" />
+                    <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="600" fontFamily="var(--body)" fill={isNext ? "#3A2A05" : "#E7F1E9"}>
+                      {m.name.slice(0, 2).toUpperCase()}
+                    </text>
+                  </g>
+                );
+              })}
+              <circle cx={center} cy={center} r={40} fill="#123B22" stroke="#C9962B" strokeWidth="1" />
+              <text x={center} y={center - 6} textAnchor="middle" fontSize="9" fontFamily="var(--body)" fill="#A9C9AE">pot</text>
+              <text x={center} y={center + 10} textAnchor="middle" fontSize="12" fontWeight="700" fontFamily="var(--mono)" fill="#F3D48A">
+                {fmt(totals.potBalance).replace(/\.00$/, "")}
+              </text>
+            </svg>
+            <p style={styles.wheelCaption}>
+              {nextRecipient ? (
+                <>Next in line for payout: <strong style={{ color: "#F3D48A" }}>{nextRecipient.name}</strong>{isManualNext && <span style={styles.manualTag}>manually set</span>}</>
+              ) : (
+                "Add members to see who's next"
+              )}
+            </p>
+            {data.members.length > 0 && (
+              <div style={styles.overrideRow}>
+                <select
+                  style={styles.overrideSelect}
+                  value={isManualNext ? data.nextOverrideId : ""}
+                  onChange={(e) => setNextOverride(e.target.value)}
+                >
+                  <option value="">Auto ({autoNextRecipient ? autoNextRecipient.name : "—"})</option>
+                  {data.members.map((m) => (
+                    <option key={m.id} value={m.id}>Set next: {m.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          <div style={styles.statCol}>
+            <div style={styles.statCard}>
+              <p style={styles.statLabel}>Total collected</p>
+              <p style={styles.statValue}>{fmt(totals.totalCollected)}</p>
+            </div>
+            <div style={styles.statCard}>
+              <p style={styles.statLabel}>Pot balance (payouts)</p>
+              <p style={styles.statValue}>{fmt(totals.potBalance)}</p>
+            </div>
+            <div style={styles.statCardAccent}>
+              <p style={styles.statLabelAccent}>Emergency fund balance</p>
+              <p style={styles.statValueAccent}>{fmt(totals.efBalance)}</p>
+            </div>
+          </div>
+        </div>
+      </header>
+      {notice && (
+        <div style={notice.type === "warning" ? styles.noticeWarning : styles.noticeError}>
+          {notice.text}
+        </div>
+      )}
+      <nav style={styles.tabs}>
+        {[
+          ["overview", "Members"],
+          ["contributions", "Contributions"],
+          ["payouts", "Payouts"],
+          ["fund", "Emergency fund"],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            style={tab === key ? styles.tabActive : styles.tab}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      <main style={styles.main}>
+        {tab === "overview" && (
+          <section>
+            <div style={styles.formRow}>
+              <input
+                style={styles.input}
+                placeholder="Member name"
+                value={memberName}
+                onChange={(e) => setMemberName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addMember(); }}
+              />
+              <select style={styles.input} value="adult" onChange={() => {}}>
+                <option value="adult">Adult ($50)</option>
+                <option value="child">Child ($25)</option>
+              </select>
+              <button style={styles.btnPrimary} type="button" onClick={addMember}>Add member</button>
+            </div>
+            {perMember.length === 0 ? (
+              <p style={styles.empty}>No members yet. Add the first person in your susu circle above.</p>
+            ) : (
+              <table style={styles.table} className="rtable">
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Member</th>
+                    <th style={styles.th}>Type</th>
+                    <th style={styles.th}>Contributed</th>
+                    <th style={styles.th}>Received</th>
+                    <th style={styles.th}>EF Balance</th>
+                    <th style={styles.th}>Recorded By</th>
+                    <th style={styles.th}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {perMember.map((m) => (
+                    <tr key={m.id}>
+                      <td style={styles.td} data-label="Member">
+                        {m.name}
+                        {nextRecipient && nextRecipient.id === m.id && (
+                          <span style={styles.nextTag}>next</span>
+                        )}
+                      </td>
+                      <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
+                      <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
+                      <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
+                      <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
+                      <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
+                      <td style={styles.td}>
+                        <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+        {tab === "contributions" && (
+          <section>
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={cMember} onChange={(e) => setCMember(e.target.value)}>
+                <option value="">Select member</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} ({m.type === 'child' ? '$25' : '$50'})</option>
+                ))}
+              </select>
+              <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
+              {cMember && (
+                <input style={styles.input} type="number" value={getContributionAmount(cMember)} readOnly disabled placeholder="Amount" />
+              )}
+              <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
+            </div>
+            {cMember && data.members.find(m => m.id === cMember) && (
+              <p style={styles.splitPreview}>
+                {data.members.find(m => m.id === cMember).type === 'child' 
+                  ? `Child contribution: $${getContributionAmount(cMember)} goes 100% to Emergency Fund`
+                  : `Adult contribution: $${getContributionAmount(cMember)} splits into ${fmt(ADULT_CONTRIBUTION * POT_PCT)} to the pot and ${fmt(ADULT_CONTRIBUTION * EF_PCT)} to the emergency fund.`
+                }
+              </p>
+            )}
+            {data.contributions.length === 0 ? (
+              <p style={styles.empty}>No contributions recorded yet.</p>
+            ) : (
+              <table style={styles.table} className="rtable">
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Month</th>
+                    <th style={styles.th}>Member</th>
+                    <th style={styles.th}>Type</th>
+                    <th style={styles.th}>Amount</th>
+                    <th style={styles.th}>To pot</th>
+                    <th style={styles.th}>To fund</th>
+                    <th style={styles.th}>Recorded By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...data.contributions]
+                    .sort((a, b) => (a.date < b.date ? 1 : -1))
+                    .map((c) => (
+                      <tr key={c.id}>
+                        <td style={styles.td} data-label="Month">{monthLabel(c.month)}</td>
+                        <td style={styles.td} data-label="Member">{memberById[c.memberId]?.name || "Removed member"}</td>
+                        <td style={styles.td} data-label="Type">{c.memberType === 'child' ? 'Child' : 'Adult'}</td>
+                        <td style={styles.td} data-label="Amount">{fmt(c.amount)}</td>
+                        <td style={styles.td} data-label="To pot">{fmt(c.potShare)}</td>
+                        <td style={styles.td} data-label="To fund">{fmt(c.efShare)}</td>
+                        <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+        {tab === "payouts" && (
+          <section>
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={pMember} onChange={(e) => setPMember(e.target.value)}>
+                <option value="">Select member</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
+              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
+              <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
+            </div>
+            <p style={styles.hint}>Pot balance available: {fmt(totals.potBalance)}</p>
+            {data.payouts.length === 0 ? (
+              <p style={styles.empty}>No payouts recorded yet.</p>
+            ) : (
+              <table style={styles.table} className="rtable">
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Month</th>
+                    <th style={styles.th}>Member</th>
+                    <th style={styles.th}>Amount</th>
+                    <th style={styles.th}>Recorded By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...data.payouts]
+                    .sort((a, b) => (a.date < b.date ? 1 : -1))
+                    .map((p) => (
+                      <tr key={p.id}>
+                        <td style={styles.td} data-label="Month">{monthLabel(p.month)}</td>
+                        <td style={styles.td} data-label="Member">{memberById[p.memberId]?.name || "Removed member"}</td>
+                        <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
+                        <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+        {tab === "fund" && (
+          <section>
+            <div style={styles.fundBalanceCard}>
+              <p style={styles.statLabelAccent}>Emergency fund balance</p>
+              <p style={styles.statValueAccent}>{fmt(totals.efBalance)}</p>
+            </div>
+            <h4 style={{ margin: "16px 0 8px" }}>Record Withdrawal</h4>
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={eMember} onChange={(e) => setEMember(e.target.value)}>
+                <option value="">Select member</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <input style={styles.input} placeholder="Reason (e.g. medical, funeral)" value={eReason} onChange={(e) => setEReason(e.target.value)} />
+              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
+              <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
+            </div>
+            {data.efWithdrawals.length === 0 ? (
+              <p style={styles.empty}>No withdrawals recorded yet.</p>
+            ) : (
+              <div>
+                <h4 style={{ margin: "16px 0 8px" }}>Withdrawals & Repayments</h4>
+                <table style={styles.table} className="rtable">
+                  <thead>
+                    <tr>
+                      <th style={styles.th}>Date</th>
+                      <th style={styles.th}>Member</th>
+                      <th style={styles.th}>Reason</th>
+                      <th style={styles.th}>Amount</th>
+                      <th style={styles.th}>Repaid</th>
+                      <th style={styles.th}>Remaining</th>
+                      <th style={styles.th}>Recorded By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...data.efWithdrawals]
+                      .sort((a, b) => (a.date < b.date ? 1 : -1))
+                      .map((w) => (
+                        <tr key={w.id}>
+                          <td style={styles.td} data-label="Date">{new Date(w.date).toLocaleDateString()}</td>
+                          <td style={styles.td} data-label="Member">{w.memberId ? (memberById[w.memberId]?.name || "Removed member") : "General fund"}</td>
+                          <td style={styles.td} data-label="Reason">{w.reason}</td>
+                          <td style={styles.td} data-label="Amount">{fmt(w.amount)}</td>
+                          <td style={styles.td} data-label="Repaid">{fmt(w.repaid || 0)}</td>
+                          <td style={styles.td} data-label="Remaining">{fmt(w.remaining || w.amount)}</td>
+                          <td style={styles.td} data-label="Recorded By">{w.recordedBy ? `Recorded By ${w.recordedBy}` : "—"}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+    </div>
+  );
+}
+
+const globalCss = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
+:root {
+  --display: 'Fraunces', serif;
+  --body: 'Inter', sans-serif;
+  --mono: 'JetBrains Mono', monospace;
+}
+table { border-collapse: collapse; width: 100%; }
+@media (max-width: 640px) {
+  .rtable thead { position: absolute; left: -9999px; }
+  .rtable, .rtable tbody, .rtable tr, .rtable td { display: block; width: 100%; }
+  .rtable tr { border: 1px solid #E4DBC4; border-radius: 8px; margin-bottom: 10px; padding: 4px 12px; background: #FFFDF7; }
+  .rtable td { border: none !important; padding: 7px 0 !important; display: flex; justify-content: space-between; align-items: center; gap: 12px; text-align: right; }
+  .rtable td::before { content: attr(data-label); font-weight: 600; color: #7A7460; font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; text-align: left; flex-shrink: 0; }
+  .rtable td:empty::before { content: none; }
+  .rtable td:last-child { justify-content: flex-end; }
+}
+`;
+
+const styles = {
+  loadingWrap: { background:
