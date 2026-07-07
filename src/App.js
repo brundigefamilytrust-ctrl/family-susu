@@ -17,7 +17,6 @@ const ADULT_CONTRIBUTION = 50;
 const CHILD_CONTRIBUTION = 25;
 const POT_PCT = 0.7;
 const EF_PCT = 0.3;
-const STORAGE_KEY = "susu-data";
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -49,8 +48,13 @@ const emptyData = {
   payouts: [],
   efWithdrawals: [],
   efRepayments: [],
+  transfers: [],
   nextOverrideId: null,
   removedLog: [],
+  settings: {
+    requirePassword: false,
+    password: ''
+  },
   updatedAt: null
 };
 
@@ -69,6 +73,17 @@ export default function SusuTracker() {
   const nameInputRef = React.useRef(null);
   const lastKnownUpdatedAt = React.useRef(null);
 
+  // ----- Password state -----
+  const [passwordInput, setPasswordInput] = useState("");
+  const [pendingAction, setPendingAction] = useState(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+
+  // ----- View-only mode -----
+  const isViewOnly = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mode') === 'view';
+  }, []);
+
   // ----- Form states -----
   const [memberName, setMemberName] = useState("");
   const [memberType, setMemberType] = useState("adult");
@@ -81,6 +96,12 @@ export default function SusuTracker() {
   const [eAmount, setEAmount] = useState("");
   const [eMember, setEMember] = useState("");
 
+  // ----- Transfer state -----
+  const [transferDirection, setTransferDirection] = useState("ef-to-pot");
+  const [transferAmount, setTransferAmount] = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [showTransferModal, setShowTransferModal] = useState(false);
+
   // ----- Transaction filters -----
   const [txType, setTxType] = useState("all");
   const [txSearch, setTxSearch] = useState("");
@@ -90,6 +111,10 @@ export default function SusuTracker() {
   // ----- Repayment state -----
   const [repayLoanId, setRepayLoanId] = useState(null);
   const [repayAmount, setRepayAmount] = useState("");
+
+  // ----- Password settings state -----
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordToggle, setPasswordToggle] = useState(false);
 
   // ============================================
   // SUPABASE SYNC
@@ -111,11 +136,20 @@ export default function SusuTracker() {
       if (error) throw error;
       if (result && result.value) {
         const parsed = result.value;
+        // Ensure settings exist
+        if (!parsed.settings) {
+          parsed.settings = { requirePassword: false, password: '' };
+        }
+        if (!parsed.transfers) {
+          parsed.transfers = [];
+        }
         const remoteUpdatedAt = parsed.updatedAt || null;
         const isNewer = !lastKnownUpdatedAt.current || !remoteUpdatedAt || remoteUpdatedAt > lastKnownUpdatedAt.current;
         if (isNewer) {
           setData({ ...emptyData, ...parsed });
           lastKnownUpdatedAt.current = remoteUpdatedAt;
+          // Update password toggle state
+          setPasswordToggle(parsed.settings?.requirePassword || false);
         }
       }
       setSyncedAt(new Date());
@@ -142,6 +176,58 @@ export default function SusuTracker() {
   }
 
   // ============================================
+  // PASSWORD CHECK
+  // ============================================
+  function requiresPasswordCheck() {
+    return data.settings?.requirePassword === true;
+  }
+
+  function checkPassword(input) {
+    return input === (data.settings?.password || '');
+  }
+
+  function wrapWithPasswordCheck(action, actionName) {
+    if (isViewOnly) {
+      setNotice({ type: "error", text: "View-only mode — you cannot make changes." });
+      return;
+    }
+    if (!recorderName) {
+      setEditingName(true);
+      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      return;
+    }
+    if (requiresPasswordCheck()) {
+      setPendingAction({ action, actionName });
+      setPasswordInput("");
+      setShowPasswordModal(true);
+    } else {
+      action();
+    }
+  }
+
+  function executePendingAction() {
+    if (!checkPassword(passwordInput)) {
+      setNotice({ type: "error", text: "Incorrect password. Action canceled." });
+      setShowPasswordModal(false);
+      setPendingAction(null);
+      setPasswordInput("");
+      return;
+    }
+    setShowPasswordModal(false);
+    if (pendingAction) {
+      pendingAction.action();
+      setPendingAction(null);
+    }
+    setPasswordInput("");
+  }
+
+  function cancelPasswordModal() {
+    setShowPasswordModal(false);
+    setPendingAction(null);
+    setPasswordInput("");
+  }
+
+  // ============================================
   // HELPERS
   // ============================================
   const memberById = useMemo(() => {
@@ -157,10 +243,29 @@ export default function SusuTracker() {
     const efIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? c.amount : (c.efShare || 0)), 0);
     const efOut = data.efWithdrawals.reduce((s, w) => s + w.amount, 0);
     const efRepaid = data.efRepayments ? data.efRepayments.reduce((s, r) => s + r.amount, 0) : 0;
+    
+    // Calculate transfers
+    const transfers = data.transfers || [];
+    let efToPotTotal = 0;
+    let potToEfTotal = 0;
+    transfers.forEach(t => {
+      if (t.direction === 'ef-to-pot') efToPotTotal += t.amount;
+      if (t.direction === 'pot-to-ef') potToEfTotal += t.amount;
+    });
+
+    const potBalance = potIn - potOut + efToPotTotal - potToEfTotal;
+    const efBalance = efIn - efOut + efRepaid - efToPotTotal + potToEfTotal;
+
     return {
       totalCollected,
-      potBalance: potIn - potOut,
-      efBalance: efIn - efOut + efRepaid,
+      potBalance,
+      efBalance,
+      efIn,
+      efOut,
+      efRepaid,
+      transfers,
+      efToPotTotal,
+      potToEfTotal
     };
   }, [data]);
 
@@ -286,6 +391,22 @@ export default function SusuTracker() {
       });
     });
 
+    // Transfers
+    (data.transfers || []).forEach((t) => {
+      rows.push({
+        id: `t-${t.id}`,
+        type: 'transfer',
+        typeLabel: 'Transfer',
+        date: t.date,
+        memberName: '—',
+        amount: t.amount,
+        recordedBy: t.recordedBy || '—',
+        detail: `${t.direction === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'} · ${t.reason || 'No reason given'}`,
+        originalId: t.id,
+        canRemove: true
+      });
+    });
+
     // Removed entries (audit log)
     (data.removedLog || []).forEach((r) => {
       const e = r.removedEntry || {};
@@ -325,200 +446,303 @@ export default function SusuTracker() {
   }
 
   function setNextOverride(id) {
-    persist({ ...data, nextOverrideId: id || null });
+    const action = () => {
+      persist({ ...data, nextOverrideId: id || null });
+    };
+    wrapWithPasswordCheck(action, 'Set next payout');
   }
 
+  // ----- Members -----
   function addMember() {
     const name = memberName.trim();
     if (!name) return;
-    if (!recorderName) { requireName(); return; }
-    const next = {
-      ...data,
-      members: [...data.members, { id: uid(), name, type: memberType, order: data.members.length, recordedBy: recorderName }],
+    const action = () => {
+      const next = {
+        ...data,
+        members: [...data.members, { id: uid(), name, type: memberType, order: data.members.length, recordedBy: recorderName }],
+      };
+      persist(next);
+      setMemberName("");
+      const logEntry = {
+        id: uid(),
+        kind: 'member_added',
+        removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      persist({ ...next, removedLog: [...next.removedLog, logEntry] });
     };
-    persist(next);
-    setMemberName("");
-    // Log member addition in removedLog as audit
-    const logEntry = {
-      id: uid(),
-      kind: 'member_added',
-      removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
-    };
-    persist({ ...next, removedLog: [...next.removedLog, logEntry] });
+    wrapWithPasswordCheck(action, 'Add member');
   }
 
   function removeMember(id) {
-    if (!recorderName) { requireName(); return; }
-    const member = data.members.find(m => m.id === id);
-    const logEntry = {
-      id: uid(),
-      kind: 'member_removed',
-      removedEntry: { memberName: member?.name || 'Unknown', memberId: id, recordedBy: recorderName },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
+    const action = () => {
+      const member = data.members.find(m => m.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'member_removed',
+        removedEntry: { memberName: member?.name || 'Unknown', memberId: id, recordedBy: recorderName },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      const next = {
+        ...data,
+        members: data.members.filter((m) => m.id !== id),
+        removedLog: [...data.removedLog, logEntry]
+      };
+      persist(next);
     };
-    const next = {
-      ...data,
-      members: data.members.filter((m) => m.id !== id),
-      removedLog: [...data.removedLog, logEntry]
-    };
-    persist(next);
+    wrapWithPasswordCheck(action, 'Remove member');
   }
 
+  // ----- Contributions -----
   function addContribution() {
     const member = data.members.find(m => m.id === cMember);
     if (!member) return;
-    if (!recorderName) { requireName(); return; }
-    const amount = getContributionAmount(member.type);
-    const isChild = member.type === 'child';
-    const potShare = isChild ? 0 : Math.round(amount * POT_PCT * 100) / 100;
-    const efShare = isChild ? amount : Math.round((amount - potShare) * 100) / 100;
-    const entry = {
-      id: uid(),
-      memberId: cMember,
-      memberType: member.type,
-      month: cMonth,
-      amount,
-      potShare,
-      efShare,
-      date: new Date().toISOString(),
-      recordedBy: recorderName,
+    const action = () => {
+      const amount = getContributionAmount(member.type);
+      const isChild = member.type === 'child';
+      const potShare = isChild ? 0 : Math.round(amount * POT_PCT * 100) / 100;
+      const efShare = isChild ? amount : Math.round((amount - potShare) * 100) / 100;
+      const entry = {
+        id: uid(),
+        memberId: cMember,
+        memberType: member.type,
+        month: cMonth,
+        amount,
+        potShare,
+        efShare,
+        date: new Date().toISOString(),
+        recordedBy: recorderName,
+      };
+      persist({ ...data, contributions: [...data.contributions, entry] });
+      setNotice(null);
     };
-    persist({ ...data, contributions: [...data.contributions, entry] });
-    setNotice(null);
+    wrapWithPasswordCheck(action, 'Record contribution');
   }
 
   function removeContribution(id) {
-    if (!recorderName) { requireName(); return; }
-    const removed = data.contributions.find((c) => c.id === id);
-    const logEntry = {
-      id: uid(),
-      kind: 'contribution',
-      removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
+    const action = () => {
+      const removed = data.contributions.find((c) => c.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'contribution',
+        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      persist({
+        ...data,
+        contributions: data.contributions.filter((c) => c.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
     };
-    persist({
-      ...data,
-      contributions: data.contributions.filter((c) => c.id !== id),
-      removedLog: [...data.removedLog, logEntry],
-    });
+    wrapWithPasswordCheck(action, 'Remove contribution');
   }
 
+  // ----- Payouts -----
   function addPayout() {
     const amount = parseFloat(pAmount);
     if (!pMember || !amount || amount <= 0) return;
-    if (!recorderName) { requireName(); return; }
-    if (amount > totals.potBalance) {
-      setNotice({ type: "warning", text: `Heads up: this payout of ${fmt(amount)} is more than the pot balance of ${fmt(totals.potBalance)}. Recorded anyway.` });
-    } else { setNotice(null); }
-    const entry = { id: uid(), memberId: pMember, month: pMonth, amount, date: new Date().toISOString(), recordedBy: recorderName };
-    persist({ ...data, payouts: [...data.payouts, entry] });
-    setPAmount("");
+    const action = () => {
+      if (amount > totals.potBalance) {
+        setNotice({ type: "warning", text: `Heads up: this payout of ${fmt(amount)} is more than the pot balance of ${fmt(totals.potBalance)}. Recorded anyway.` });
+      } else { setNotice(null); }
+      const entry = { id: uid(), memberId: pMember, month: pMonth, amount, date: new Date().toISOString(), recordedBy: recorderName };
+      persist({ ...data, payouts: [...data.payouts, entry] });
+      setPAmount("");
+    };
+    wrapWithPasswordCheck(action, 'Record payout');
   }
 
   function removePayout(id) {
-    if (!recorderName) { requireName(); return; }
-    const removed = data.payouts.find((p) => p.id === id);
-    const logEntry = {
-      id: uid(),
-      kind: 'payout',
-      removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
+    const action = () => {
+      const removed = data.payouts.find((p) => p.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'payout',
+        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      persist({
+        ...data,
+        payouts: data.payouts.filter((p) => p.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
     };
-    persist({
-      ...data,
-      payouts: data.payouts.filter((p) => p.id !== id),
-      removedLog: [...data.removedLog, logEntry],
-    });
+    wrapWithPasswordCheck(action, 'Remove payout');
   }
 
+  // ----- EF Withdrawals -----
   function addWithdrawal() {
     const amount = parseFloat(eAmount);
     if (!amount || amount <= 0) return;
-    if (!recorderName) { requireName(); return; }
-    if (amount > totals.efBalance) {
-      setNotice({ type: "warning", text: `Heads up: this withdrawal of ${fmt(amount)} is more than the emergency fund balance of ${fmt(totals.efBalance)}. Recorded anyway.` });
-    } else { setNotice(null); }
-    const entry = {
-      id: uid(),
-      memberId: eMember || null,
-      reason: eReason.trim() || "Emergency fund withdrawal",
-      amount,
-      date: new Date().toISOString(),
-      recordedBy: recorderName,
+    const action = () => {
+      if (amount > totals.efBalance) {
+        setNotice({ type: "warning", text: `Heads up: this withdrawal of ${fmt(amount)} is more than the emergency fund balance of ${fmt(totals.efBalance)}. Recorded anyway.` });
+      } else { setNotice(null); }
+      const entry = {
+        id: uid(),
+        memberId: eMember || null,
+        reason: eReason.trim() || "Emergency fund withdrawal",
+        amount,
+        date: new Date().toISOString(),
+        recordedBy: recorderName,
+      };
+      persist({ ...data, efWithdrawals: [...data.efWithdrawals, entry] });
+      setEAmount("");
+      setEReason("");
+      setEMember("");
     };
-    persist({ ...data, efWithdrawals: [...data.efWithdrawals, entry] });
-    setEAmount("");
-    setEReason("");
-    setEMember("");
+    wrapWithPasswordCheck(action, 'Record EF withdrawal');
   }
 
   function removeWithdrawal(id) {
-    if (!recorderName) { requireName(); return; }
-    const removed = data.efWithdrawals.find((w) => w.id === id);
-    const logEntry = {
-      id: uid(),
-      kind: 'withdrawal',
-      removedEntry: { ...removed, memberName: removed?.memberId ? (memberById[removed.memberId]?.name || 'Unknown') : 'General fund' },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
+    const action = () => {
+      const removed = data.efWithdrawals.find((w) => w.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'withdrawal',
+        removedEntry: { ...removed, memberName: removed?.memberId ? (memberById[removed.memberId]?.name || 'Unknown') : 'General fund' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      const remainingRepayments = (data.efRepayments || []).filter(r => r.loanId !== id);
+      persist({
+        ...data,
+        efWithdrawals: data.efWithdrawals.filter((w) => w.id !== id),
+        efRepayments: remainingRepayments,
+        removedLog: [...data.removedLog, logEntry],
+      });
     };
-    // Also remove associated repayments
-    const remainingRepayments = (data.efRepayments || []).filter(r => r.loanId !== id);
-    persist({
-      ...data,
-      efWithdrawals: data.efWithdrawals.filter((w) => w.id !== id),
-      efRepayments: remainingRepayments,
-      removedLog: [...data.removedLog, logEntry],
-    });
+    wrapWithPasswordCheck(action, 'Remove EF withdrawal');
   }
 
+  // ----- Repayments -----
   function addRepayment(loanId, memberId, amount) {
     if (!amount || amount <= 0) return;
-    if (!recorderName) { requireName(); return; }
-    const loan = data.efWithdrawals.find(w => w.id === loanId);
-    if (!loan) return;
-    const alreadyRepaid = (data.efRepayments || []).filter(r => r.loanId === loanId).reduce((s, r) => s + r.amount, 0);
-    const remaining = loan.amount - alreadyRepaid;
-    if (amount > remaining) {
-      setNotice({ type: "error", text: `Repayment amount exceeds remaining balance of ${fmt(remaining)}.` });
-      return;
-    }
-    const repaymentEntry = {
-      id: uid(),
-      loanId,
-      memberId,
-      amount,
-      date: new Date().toISOString(),
-      recordedBy: recorderName
+    const action = () => {
+      const loan = data.efWithdrawals.find(w => w.id === loanId);
+      if (!loan) return;
+      const alreadyRepaid = (data.efRepayments || []).filter(r => r.loanId === loanId).reduce((s, r) => s + r.amount, 0);
+      const remaining = loan.amount - alreadyRepaid;
+      if (amount > remaining) {
+        setNotice({ type: "error", text: `Repayment amount exceeds remaining balance of ${fmt(remaining)}.` });
+        return;
+      }
+      const repaymentEntry = {
+        id: uid(),
+        loanId,
+        memberId,
+        amount,
+        date: new Date().toISOString(),
+        recordedBy: recorderName
+      };
+      const repayments = [...(data.efRepayments || []), repaymentEntry];
+      persist({ ...data, efRepayments: repayments });
+      setRepayLoanId(null);
+      setRepayAmount("");
+      setNotice({ type: "warning", text: `Repayment of ${fmt(amount)} recorded. Remaining: ${fmt(remaining - amount)}` });
     };
-    const repayments = [...(data.efRepayments || []), repaymentEntry];
-    persist({ ...data, efRepayments: repayments });
-    setRepayLoanId(null);
-    setRepayAmount("");
-    setNotice({ type: "warning", text: `Repayment of ${fmt(amount)} recorded. Remaining: ${fmt(remaining - amount)}` });
+    wrapWithPasswordCheck(action, 'Record repayment');
   }
 
   function removeRepayment(id) {
-    if (!recorderName) { requireName(); return; }
-    const removed = (data.efRepayments || []).find(r => r.id === id);
-    if (!removed) return;
-    const logEntry = {
-      id: uid(),
-      kind: 'repayment',
-      removedEntry: { ...removed, memberName: memberById[removed.memberId]?.name || 'Unknown' },
-      removedAt: new Date().toISOString(),
-      removedBy: recorderName
+    const action = () => {
+      const removed = (data.efRepayments || []).find(r => r.id === id);
+      if (!removed) return;
+      const logEntry = {
+        id: uid(),
+        kind: 'repayment',
+        removedEntry: { ...removed, memberName: memberById[removed.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      persist({
+        ...data,
+        efRepayments: (data.efRepayments || []).filter(r => r.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
     };
-    persist({
-      ...data,
-      efRepayments: (data.efRepayments || []).filter(r => r.id !== id),
-      removedLog: [...data.removedLog, logEntry],
-    });
+    wrapWithPasswordCheck(action, 'Remove repayment');
+  }
+
+  // ----- Transfers -----
+  function executeTransfer() {
+    const amount = parseFloat(transferAmount);
+    if (!amount || amount <= 0) {
+      setNotice({ type: "error", text: "Please enter a valid amount." });
+      return;
+    }
+    if (!transferReason.trim()) {
+      setNotice({ type: "error", text: "Please enter a justification for this transfer." });
+      return;
+    }
+    const action = () => {
+      const direction = transferDirection;
+      // Check if transfer would cause negative balance
+      if (direction === 'ef-to-pot' && amount > totals.efBalance) {
+        setNotice({ type: "error", text: `Insufficient funds in Emergency Fund. Available: ${fmt(totals.efBalance)}` });
+        setShowTransferModal(false);
+        return;
+      }
+      if (direction === 'pot-to-ef' && amount > totals.potBalance) {
+        setNotice({ type: "error", text: `Insufficient funds in Pot. Available: ${fmt(totals.potBalance)}` });
+        setShowTransferModal(false);
+        return;
+      }
+
+      const transferEntry = {
+        id: uid(),
+        direction,
+        amount,
+        reason: transferReason.trim(),
+        date: new Date().toISOString(),
+        recordedBy: recorderName
+      };
+
+      const transfers = [...(data.transfers || []), transferEntry];
+      persist({ ...data, transfers });
+      setTransferAmount("");
+      setTransferReason("");
+      setShowTransferModal(false);
+      setNotice({ type: "warning", text: `Transfer of ${fmt(amount)} ${direction === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'} completed.` });
+    };
+    wrapWithPasswordCheck(action, 'Execute transfer');
+  }
+
+  function removeTransfer(id) {
+    const action = () => {
+      const removed = (data.transfers || []).find(t => t.id === id);
+      if (!removed) return;
+      const logEntry = {
+        id: uid(),
+        kind: 'transfer',
+        removedEntry: { ...removed },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName
+      };
+      persist({
+        ...data,
+        transfers: (data.transfers || []).filter(t => t.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove transfer');
+  }
+
+  // ----- Settings -----
+  function updatePasswordSetting() {
+    const action = () => {
+      const settings = {
+        requirePassword: passwordToggle,
+        password: passwordToggle ? newPassword : ''
+      };
+      persist({ ...data, settings });
+      setNotice({ type: "warning", text: passwordToggle ? `Password protection enabled. Password is: "${newPassword}"` : "Password protection disabled." });
+    };
+    wrapWithPasswordCheck(action, 'Update password settings');
   }
 
   function removeTransaction(entry) {
@@ -526,12 +750,12 @@ export default function SusuTracker() {
       setNotice({ type: "error", text: "This transaction cannot be removed (audit log)." });
       return;
     }
-    if (!recorderName) { requireName(); return; }
     const type = entry.type;
     if (type === 'contribution') removeContribution(entry.originalId);
     else if (type === 'payout') removePayout(entry.originalId);
     else if (type === 'withdrawal') removeWithdrawal(entry.originalId);
     else if (type === 'repayment') removeRepayment(entry.originalId);
+    else if (type === 'transfer') removeTransfer(entry.originalId);
     else setNotice({ type: "error", text: "Cannot remove this type of entry." });
   }
 
@@ -555,6 +779,20 @@ export default function SusuTracker() {
   return (
     <div style={styles.app}>
       <style>{globalCss}</style>
+
+      {isViewOnly && (
+        <div style={{
+          background: "#3A2A05",
+          color: "#F3D48A",
+          textAlign: "center",
+          padding: "10px",
+          fontWeight: 600,
+          fontSize: 14,
+          borderBottom: "2px solid #C9962B"
+        }}>
+          🔒 VIEW-ONLY MODE — You are viewing but cannot make changes
+        </div>
+      )}
 
       <header style={styles.hero}>
         <div style={styles.heroTop}>
@@ -589,6 +827,11 @@ export default function SusuTracker() {
               <button onClick={() => setEditingName(true)} style={styles.recorderBadge} type="button">
                 Recording as <strong>{recorderName}</strong> · change
               </button>
+            )}
+            {data.settings?.requirePassword && (
+              <span style={{ fontSize: 11, color: "#F3D48A", background: "#2F6B44", padding: "2px 10px", borderRadius: 999 }}>
+                🔒 Password protected
+              </span>
             )}
           </div>
         </div>
@@ -625,7 +868,7 @@ export default function SusuTracker() {
                 "Add members to see who's next"
               )}
             </p>
-            {data.members.length > 0 && (
+            {data.members.length > 0 && !isViewOnly && (
               <div style={styles.overrideRow}>
                 <select
                   style={styles.overrideSelect}
@@ -671,6 +914,7 @@ export default function SusuTracker() {
           ["fund", "Emergency Fund"],
           ["loans", "Loans"],
           ["transactions", "Transactions"],
+          ["settings", "Settings"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -686,20 +930,22 @@ export default function SusuTracker() {
         {/* ===== MEMBERS ===== */}
         {tab === "overview" && (
           <section>
-            <div style={styles.formRow}>
-              <input
-                style={styles.input}
-                placeholder="Member name"
-                value={memberName}
-                onChange={(e) => setMemberName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addMember(); }}
-              />
-              <select style={styles.input} value={memberType} onChange={(e) => setMemberType(e.target.value)}>
-                <option value="adult">Adult ($50)</option>
-                <option value="child">Child ($25)</option>
-              </select>
-              <button style={styles.btnPrimary} type="button" onClick={addMember}>Add member</button>
-            </div>
+            {!isViewOnly && (
+              <div style={styles.formRow}>
+                <input
+                  style={styles.input}
+                  placeholder="Member name"
+                  value={memberName}
+                  onChange={(e) => setMemberName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") addMember(); }}
+                />
+                <select style={styles.input} value={memberType} onChange={(e) => setMemberType(e.target.value)}>
+                  <option value="adult">Adult ($50)</option>
+                  <option value="child">Child ($25)</option>
+                </select>
+                <button style={styles.btnPrimary} type="button" onClick={addMember}>Add member</button>
+              </div>
+            )}
             {perMember.length === 0 ? (
               <p style={styles.empty}>No members yet. Add the first person in your susu circle above.</p>
             ) : (
@@ -712,7 +958,7 @@ export default function SusuTracker() {
                     <th style={styles.th}>Received</th>
                     <th style={styles.th}>EF Balance</th>
                     <th style={styles.th}>Recorded By</th>
-                    <th style={styles.th}></th>
+                    {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -727,9 +973,11 @@ export default function SusuTracker() {
                       <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
                       <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
                       <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
-                      <td style={styles.td}>
-                        <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
-                      </td>
+                      {!isViewOnly && (
+                        <td style={styles.td}>
+                          <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -741,19 +989,21 @@ export default function SusuTracker() {
         {/* ===== CONTRIBUTIONS ===== */}
         {tab === "contributions" && (
           <section>
-            <div style={styles.formGrid}>
-              <select style={styles.input} value={cMember} onChange={(e) => setCMember(e.target.value)}>
-                <option value="">Select member</option>
-                {data.members.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name} ({m.type === 'child' ? '$25' : '$50'})</option>
-                ))}
-              </select>
-              <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
-              {cMember && (
-                <input style={styles.input} type="number" value={getContributionAmount(data.members.find(m => m.id === cMember)?.type || 'adult')} readOnly disabled placeholder="Amount" />
-              )}
-              <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
-            </div>
+            {!isViewOnly && (
+              <div style={styles.formGrid}>
+                <select style={styles.input} value={cMember} onChange={(e) => setCMember(e.target.value)}>
+                  <option value="">Select member</option>
+                  {data.members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name} ({m.type === 'child' ? '$25' : '$50'})</option>
+                  ))}
+                </select>
+                <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
+                {cMember && (
+                  <input style={styles.input} type="number" value={getContributionAmount(data.members.find(m => m.id === cMember)?.type || 'adult')} readOnly disabled placeholder="Amount" />
+                )}
+                <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
+              </div>
+            )}
             {cMember && data.members.find(m => m.id === cMember) && (
               <p style={styles.splitPreview}>
                 {data.members.find(m => m.id === cMember).type === 'child'
@@ -775,7 +1025,7 @@ export default function SusuTracker() {
                     <th style={styles.th}>To pot</th>
                     <th style={styles.th}>To fund</th>
                     <th style={styles.th}>Recorded By</th>
-                    <th style={styles.th}></th>
+                    {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -788,9 +1038,11 @@ export default function SusuTracker() {
                       <td style={styles.td} data-label="To pot">{fmt(c.potShare || 0)}</td>
                       <td style={styles.td} data-label="To fund">{fmt(c.efShare || 0)}</td>
                       <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
-                      <td style={styles.td}>
-                        <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
-                      </td>
+                      {!isViewOnly && (
+                        <td style={styles.td}>
+                          <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -802,17 +1054,19 @@ export default function SusuTracker() {
         {/* ===== PAYOUTS ===== */}
         {tab === "payouts" && (
           <section>
-            <div style={styles.formGrid}>
-              <select style={styles.input} value={pMember} onChange={(e) => setPMember(e.target.value)}>
-                <option value="">Select member</option>
-                {data.members.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-              <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
-              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
-              <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
-            </div>
+            {!isViewOnly && (
+              <div style={styles.formGrid}>
+                <select style={styles.input} value={pMember} onChange={(e) => setPMember(e.target.value)}>
+                  <option value="">Select member</option>
+                  {data.members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
+                <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
+                <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
+              </div>
+            )}
             <p style={styles.hint}>Pot balance available: {fmt(totals.potBalance)}</p>
             {data.payouts.length === 0 ? (
               <p style={styles.empty}>No payouts recorded yet.</p>
@@ -824,7 +1078,7 @@ export default function SusuTracker() {
                     <th style={styles.th}>Member</th>
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
-                    <th style={styles.th}></th>
+                    {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -834,9 +1088,11 @@ export default function SusuTracker() {
                       <td style={styles.td} data-label="Member">{memberById[p.memberId]?.name || "Removed member"}</td>
                       <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
-                      <td style={styles.td}>
-                        <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
-                      </td>
+                      {!isViewOnly && (
+                        <td style={styles.td}>
+                          <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -852,21 +1108,64 @@ export default function SusuTracker() {
               <p style={styles.statLabelAccent}>Emergency fund balance</p>
               <p style={styles.statValueAccent}>{fmt(totals.efBalance)}</p>
             </div>
-            <h4 style={{ margin: "16px 0 8px" }}>Record Withdrawal</h4>
-            <div style={styles.formGrid}>
-              <select style={styles.input} value={eMember} onChange={(e) => setEMember(e.target.value)}>
-                <option value="">Select member</option>
-                {data.members.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-              <input style={styles.input} placeholder="Reason (e.g. medical, funeral)" value={eReason} onChange={(e) => setEReason(e.target.value)} />
-              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
-              <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
-            </div>
 
-            {data.efWithdrawals.length === 0 ? (
-              <p style={styles.empty}>No withdrawals recorded yet.</p>
+            {!isViewOnly && (
+              <>
+                <h4 style={{ margin: "16px 0 8px" }}>Record Withdrawal</h4>
+                <div style={styles.formGrid}>
+                  <select style={styles.input} value={eMember} onChange={(e) => setEMember(e.target.value)}>
+                    <option value="">Select member</option>
+                    {data.members.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  <input style={styles.input} placeholder="Reason (e.g. medical, funeral)" value={eReason} onChange={(e) => setEReason(e.target.value)} />
+                  <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
+                  <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
+                </div>
+
+                <h4 style={{ margin: "16px 0 8px" }}>Transfer Funds</h4>
+                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
+                  <select style={styles.input} value={transferDirection} onChange={(e) => setTransferDirection(e.target.value)}>
+                    <option value="ef-to-pot">Emergency Fund → Pot</option>
+                    <option value="pot-to-ef">Pot → Emergency Fund</option>
+                  </select>
+                  <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} />
+                  <input style={styles.input} placeholder="Justification (required)" value={transferReason} onChange={(e) => setTransferReason(e.target.value)} />
+                  <button style={styles.btnPrimary} type="button" onClick={() => {
+                    if (!parseFloat(transferAmount) || parseFloat(transferAmount) <= 0) {
+                      setNotice({ type: "error", text: "Please enter a valid amount." });
+                      return;
+                    }
+                    if (!transferReason.trim()) {
+                      setNotice({ type: "error", text: "Please enter a justification." });
+                      return;
+                    }
+                    // Show confirmation modal with justification
+                    setShowTransferModal(true);
+                  }}>Execute Transfer</button>
+                </div>
+
+                {showTransferModal && (
+                  <div style={styles.modalOverlay}>
+                    <div style={styles.modal}>
+                      <h3 style={{ marginTop: 0 }}>Confirm Transfer</h3>
+                      <p><strong>Direction:</strong> {transferDirection === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'}</p>
+                      <p><strong>Amount:</strong> {fmt(parseFloat(transferAmount) || 0)}</p>
+                      <p><strong>Justification:</strong> {transferReason}</p>
+                      <p style={{ color: "#9C4A2E", fontSize: 13 }}>⚠️ This action will permanently move funds between accounts.</p>
+                      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                        <button style={styles.btnPrimary} onClick={executeTransfer}>Confirm Transfer</button>
+                        <button style={styles.btnGhostSmall} onClick={() => { setShowTransferModal(false); }}>Cancel</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {data.efWithdrawals.length === 0 && (data.transfers || []).length === 0 ? (
+              <p style={styles.empty}>No withdrawals or transfers recorded yet.</p>
             ) : (
               <div>
                 <h4 style={{ margin: "16px 0 8px" }}>Withdrawals & Repayments</h4>
@@ -880,7 +1179,7 @@ export default function SusuTracker() {
                       <th style={styles.th}>Repaid</th>
                       <th style={styles.th}>Remaining</th>
                       <th style={styles.th}>Recorded By</th>
-                      <th style={styles.th}>Actions</th>
+                      {!isViewOnly && <th style={styles.th}>Actions</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -896,25 +1195,61 @@ export default function SusuTracker() {
                           <td style={styles.td} data-label="Repaid">{fmt(repaid)}</td>
                           <td style={styles.td} data-label="Remaining">{fmt(remaining)}</td>
                           <td style={styles.td} data-label="Recorded By">{w.recordedBy ? `Recorded By ${w.recordedBy}` : "—"}</td>
-                          <td style={styles.td} data-label="Actions">
-                            {remaining > 0.01 && (
-                              <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
-                            )}
-                            <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
-                          </td>
+                          {!isViewOnly && (
+                            <td style={styles.td} data-label="Actions">
+                              {remaining > 0.01 && (
+                                <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
+                              )}
+                              <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
 
-                {repayLoanId && (
+                {repayLoanId && !isViewOnly && (
                   <div style={{ ...styles.formGrid, marginTop: 12, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
                     <span style={{ fontWeight: 600, alignSelf: "center" }}>Repay loan for {memberById[data.efWithdrawals.find(w => w.id === repayLoanId)?.memberId]?.name || 'member'}</span>
                     <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={repayAmount} onChange={(e) => setRepayAmount(e.target.value)} />
                     <button style={styles.btnPrimary} onClick={() => addRepayment(repayLoanId, data.efWithdrawals.find(w => w.id === repayLoanId)?.memberId, parseFloat(repayAmount))}>Submit Repayment</button>
                     <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(null); setRepayAmount(""); }}>Cancel</button>
                   </div>
+                )}
+
+                {(data.transfers || []).length > 0 && (
+                  <>
+                    <h4 style={{ margin: "16px 0 8px" }}>Transfer History</h4>
+                    <table style={styles.table} className="rtable">
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Date</th>
+                          <th style={styles.th}>Direction</th>
+                          <th style={styles.th}>Amount</th>
+                          <th style={styles.th}>Justification</th>
+                          <th style={styles.th}>Recorded By</th>
+                          {!isViewOnly && <th style={styles.th}></th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...(data.transfers || [])].sort((a, b) => (a.date < b.date ? 1 : -1)).map((t) => (
+                          <tr key={t.id}>
+                            <td style={styles.td} data-label="Date">{new Date(t.date).toLocaleDateString()}</td>
+                            <td style={styles.td} data-label="Direction">{t.direction === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'}</td>
+                            <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
+                            <td style={styles.td} data-label="Justification">{t.reason}</td>
+                            <td style={styles.td} data-label="Recorded By">{t.recordedBy || '—'}</td>
+                            {!isViewOnly && (
+                              <td style={styles.td}>
+                                <button style={styles.btnGhostSmall} onClick={() => removeTransfer(t.id)}>Remove</button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
                 )}
               </div>
             )}
@@ -969,6 +1304,7 @@ export default function SusuTracker() {
                 <option value="payout">Payouts</option>
                 <option value="withdrawal">Emergency Withdrawals</option>
                 <option value="repayment">EF Repayments</option>
+                <option value="transfer">Transfers</option>
                 <option value="removed">Removed entries</option>
               </select>
               <input style={styles.input} placeholder="Search by member name" value={txSearch} onChange={(e) => setTxSearch(e.target.value)} />
@@ -993,7 +1329,7 @@ export default function SusuTracker() {
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
                     <th style={styles.th}>Details</th>
-                    <th style={styles.th}></th>
+                    {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1008,12 +1344,14 @@ export default function SusuTracker() {
                       <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{t.recordedBy}</td>
                       <td style={styles.td} data-label="Details">{t.detail}</td>
-                      <td style={styles.td} data-label="Actions">
-                        {t.canRemove && (
-                          <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
-                        )}
-                        {!t.canRemove && <span style={{ fontSize: 11, color: "#8A8471" }}>Audit</span>}
-                      </td>
+                      {!isViewOnly && (
+                        <td style={styles.td} data-label="Actions">
+                          {t.canRemove && (
+                            <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
+                          )}
+                          {!t.canRemove && <span style={{ fontSize: 11, color: "#8A8471" }}>Audit</span>}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -1021,7 +1359,148 @@ export default function SusuTracker() {
             )}
           </section>
         )}
+
+        {/* ===== SETTINGS ===== */}
+        {tab === "settings" && (
+          <section>
+            <h3 style={{ marginBottom: 12 }}>App Settings</h3>
+
+            {isViewOnly ? (
+              <p style={styles.empty}>Settings are not available in view-only mode.</p>
+            ) : (
+              <>
+                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+                    <label style={{ fontWeight: 600 }}>Password Protection</label>
+                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
+                      When enabled, all write actions (add, remove, transfer, repay) will require a password.
+                    </p>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={passwordToggle}
+                        onChange={(e) => {
+                          setPasswordToggle(e.target.checked);
+                          if (!e.target.checked) {
+                            // If turning off, clear password
+                            const settings = { requirePassword: false, password: '' };
+                            persist({ ...data, settings });
+                            setNewPassword("");
+                            setNotice({ type: "warning", text: "Password protection disabled." });
+                          }
+                        }}
+                      />
+                      Require password for changes
+                    </label>
+                  </div>
+                </div>
+
+                {passwordToggle && (
+                  <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
+                    <input
+                      style={styles.input}
+                      type="text"
+                      placeholder="Set new password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                    />
+                    <button style={styles.btnPrimary} onClick={() => {
+                      if (!newPassword.trim()) {
+                        setNotice({ type: "error", text: "Please enter a password." });
+                        return;
+                      }
+                      const settings = { requirePassword: true, password: newPassword.trim() };
+                      persist({ ...data, settings });
+                      setPasswordToggle(true);
+                      setNotice({ type: "warning", text: `Password set to: "${newPassword.trim()}"` });
+                    }}>Set Password</button>
+                    {data.settings?.password && (
+                      <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A" }}>
+                        Current password: <strong>{data.settings.password}</strong>
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontWeight: 600 }}>View-Only Link</label>
+                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                      Share this link with members who should only view data, not make changes:
+                    </p>
+                    <code style={{
+                      display: "block",
+                      background: "#123B22",
+                      color: "#F3D48A",
+                      padding: "10px",
+                      borderRadius: 6,
+                      fontSize: 13,
+                      wordBreak: "break-all",
+                      marginTop: 8
+                    }}>
+                      {window.location.origin}{window.location.pathname}?mode=view
+                    </code>
+                    <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?mode=view`);
+                      setNotice({ type: "warning", text: "View-only link copied to clipboard!" });
+                    }}>Copy Link</button>
+                  </div>
+                </div>
+
+                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
+                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                      Share this link with treasurers who need to make changes:
+                    </p>
+                    <code style={{
+                      display: "block",
+                      background: "#123B22",
+                      color: "#F3D48A",
+                      padding: "10px",
+                      borderRadius: 6,
+                      fontSize: 13,
+                      wordBreak: "break-all",
+                      marginTop: 8
+                    }}>
+                      {window.location.origin}{window.location.pathname}
+                    </code>
+                    <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
+                      setNotice({ type: "warning", text: "Edit link copied to clipboard!" });
+                    }}>Copy Link</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </section>
+        )}
       </main>
+
+      {/* ===== PASSWORD MODAL ===== */}
+      {showPasswordModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
+            <h3 style={{ marginTop: 0 }}>🔒 Password Required</h3>
+            <p>Enter the password to perform: <strong>{pendingAction?.actionName || 'this action'}</strong></p>
+            <input
+              style={{ ...styles.input, width: "100%", marginTop: 8 }}
+              type="password"
+              placeholder="Enter password..."
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") executePendingAction(); }}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+              <button style={styles.btnPrimary} onClick={executePendingAction}>Submit</button>
+              <button style={styles.btnGhostSmall} onClick={cancelPasswordModal}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1100,4 +1579,25 @@ const styles = {
   td: { padding: "8px 10px", borderBottom: "1px solid #EEE7D4" },
   nextTag: { marginLeft: 8, background: "#FAEEDA", color: "#633806", fontSize: 10, padding: "2px 6px", borderRadius: 999, fontWeight: 600, textTransform: "uppercase" },
   fundBalanceCard: { background: "#3A2A05", border: "1px solid #C9962B", borderRadius: 10, padding: "14px 18px", marginBottom: 16, display: "inline-block" },
+  modalOverlay: {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: "rgba(0,0,0,0.6)",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 999
+  },
+  modal: {
+    background: "#FFFDF7",
+    padding: "24px",
+    borderRadius: 12,
+    maxWidth: "420px",
+    width: "90%",
+    boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+    border: "1px solid #E4DBC4"
+  }
 };
