@@ -2,16 +2,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
+// ============================================
+// SUPABASE CONFIG
+// ============================================
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://rgolcprnbzrqleurebah.supabase.co";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb2xjcHJuYnpycWxldXJlYmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNjcwNDUsImV4cCI6MjA5ODk0MzA0NX0.PQfamuJYqcm1LWFSv_yhib8anMe4QUWzETwNJ35FBaA";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ============================================
+// CONSTANTS
+// ============================================
 const ADULT_CONTRIBUTION = 50;
 const CHILD_CONTRIBUTION = 25;
 const POT_PCT = 0.7;
 const EF_PCT = 0.3;
+const STORAGE_KEY = "susu-data";
 
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -29,6 +39,10 @@ function monthLabel(m) {
   return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
 }
 
+function getContributionAmount(memberType) {
+  return memberType === 'child' ? CHILD_CONTRIBUTION : ADULT_CONTRIBUTION;
+}
+
 const emptyData = {
   members: [],
   contributions: [],
@@ -36,23 +50,17 @@ const emptyData = {
   efWithdrawals: [],
   efRepayments: [],
   nextOverrideId: null,
-  removedLog: []
+  removedLog: [],
+  updatedAt: null
 };
 
+// ============================================
+// MAIN COMPONENT
+// ============================================
 export default function SusuTracker() {
   const [data, setData] = useState(emptyData);
   const [loaded, setLoaded] = useState(false);
   const [tab, setTab] = useState("overview");
-  const [memberName, setMemberName] = useState("");
-  const [cMember, setCMember] = useState("");
-  const [cMonth, setCMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [cAmount, setCAmount] = useState("");
-  const [pMember, setPMember] = useState("");
-  const [pMonth, setPMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const [pAmount, setPAmount] = useState("");
-  const [eReason, setEReason] = useState("");
-  const [eAmount, setEAmount] = useState("");
-  const [eMember, setEMember] = useState("");
   const [notice, setNotice] = useState(null);
   const [syncedAt, setSyncedAt] = useState(null);
   const [recorderName, setRecorderName] = useState("");
@@ -61,6 +69,31 @@ export default function SusuTracker() {
   const nameInputRef = React.useRef(null);
   const lastKnownUpdatedAt = React.useRef(null);
 
+  // ----- Form states -----
+  const [memberName, setMemberName] = useState("");
+  const [memberType, setMemberType] = useState("adult");
+  const [cMember, setCMember] = useState("");
+  const [cMonth, setCMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [pMember, setPMember] = useState("");
+  const [pMonth, setPMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [pAmount, setPAmount] = useState("");
+  const [eReason, setEReason] = useState("");
+  const [eAmount, setEAmount] = useState("");
+  const [eMember, setEMember] = useState("");
+
+  // ----- Transaction filters -----
+  const [txType, setTxType] = useState("all");
+  const [txSearch, setTxSearch] = useState("");
+  const [txFrom, setTxFrom] = useState("");
+  const [txTo, setTxTo] = useState("");
+
+  // ----- Repayment state -----
+  const [repayLoanId, setRepayLoanId] = useState(null);
+  const [repayAmount, setRepayAmount] = useState("");
+
+  // ============================================
+  // SUPABASE SYNC
+  // ============================================
   useEffect(() => {
     loadShared();
     const interval = setInterval(loadShared, 10000);
@@ -74,7 +107,7 @@ export default function SusuTracker() {
         .select('value')
         .eq('key', 'susu_data')
         .single();
-      
+
       if (error) throw error;
       if (result && result.value) {
         const parsed = result.value;
@@ -108,6 +141,9 @@ export default function SusuTracker() {
     setSyncedAt(new Date());
   }
 
+  // ============================================
+  // HELPERS
+  // ============================================
   const memberById = useMemo(() => {
     const map = {};
     data.members.forEach((m) => (map[m.id] = m));
@@ -116,9 +152,9 @@ export default function SusuTracker() {
 
   const totals = useMemo(() => {
     const totalCollected = data.contributions.reduce((s, c) => s + c.amount, 0);
-    const potIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? 0 : c.potShare || 0), 0);
+    const potIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? 0 : (c.potShare || 0)), 0);
     const potOut = data.payouts.reduce((s, p) => s + p.amount, 0);
-    const efIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? c.amount : c.efShare || 0), 0);
+    const efIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? c.amount : (c.efShare || 0)), 0);
     const efOut = data.efWithdrawals.reduce((s, w) => s + w.amount, 0);
     const efRepaid = data.efRepayments ? data.efRepayments.reduce((s, r) => s + r.amount, 0) : 0;
     return {
@@ -142,9 +178,9 @@ export default function SusuTracker() {
       const efReceived = data.efWithdrawals
         .filter((w) => w.memberId === m.id)
         .reduce((s, w) => s + w.amount, 0);
-      const efRepaid = data.efRepayments ? data.efRepayments
+      const efRepaid = data.efRepayments
         .filter((r) => r.memberId === m.id)
-        .reduce((s, r) => s + r.amount, 0) : 0;
+        .reduce((s, r) => s + r.amount, 0);
       return { ...m, contributed, received, lastPayoutDate: lastPayout ? lastPayout.date : null, efReceived, efRepaid, efBalance: efReceived - efRepaid };
     });
   }, [data.members, data.contributions, data.payouts, data.efWithdrawals, data.efRepayments]);
@@ -165,6 +201,129 @@ export default function SusuTracker() {
     ? perMember.find((m) => m.id === data.nextOverrideId)
     : autoNextRecipient;
 
+  const loansOutstanding = useMemo(() => {
+    return data.efWithdrawals
+      .filter(w => {
+        const repaid = data.efRepayments.filter(r => r.loanId === w.id).reduce((s, r) => s + r.amount, 0);
+        return (w.amount - repaid) > 0.01;
+      })
+      .map(w => {
+        const repaid = data.efRepayments.filter(r => r.loanId === w.id).reduce((s, r) => s + r.amount, 0);
+        const remaining = w.amount - repaid;
+        return { ...w, repaid, remaining };
+      })
+      .sort((a, b) => a.remaining - b.remaining);
+  }, [data.efWithdrawals, data.efRepayments]);
+
+  // ============================================
+  // ALL TRANSACTIONS
+  // ============================================
+  const allTransactions = useMemo(() => {
+    const rows = [];
+
+    // Contributions
+    data.contributions.forEach((c) => {
+      rows.push({
+        id: `c-${c.id}`,
+        type: 'contribution',
+        typeLabel: 'Contribution',
+        date: c.date,
+        memberName: memberById[c.memberId]?.name || 'Removed member',
+        amount: c.amount,
+        recordedBy: c.recordedBy || '—',
+        detail: `${c.memberType === 'child' ? 'Child' : 'Adult'} · ${fmt(c.potShare || 0)} to pot, ${fmt(c.efShare || 0)} to fund · ${monthLabel(c.month)}`,
+        originalId: c.id,
+        canRemove: true
+      });
+    });
+
+    // Payouts
+    data.payouts.forEach((p) => {
+      rows.push({
+        id: `p-${p.id}`,
+        type: 'payout',
+        typeLabel: 'Payout',
+        date: p.date,
+        memberName: memberById[p.memberId]?.name || 'Removed member',
+        amount: p.amount,
+        recordedBy: p.recordedBy || '—',
+        detail: `Payout · ${monthLabel(p.month)}`,
+        originalId: p.id,
+        canRemove: true
+      });
+    });
+
+    // EF Withdrawals
+    data.efWithdrawals.forEach((w) => {
+      const repaid = data.efRepayments.filter(r => r.loanId === w.id).reduce((s, r) => s + r.amount, 0);
+      rows.push({
+        id: `w-${w.id}`,
+        type: 'withdrawal',
+        typeLabel: 'Emergency Withdrawal',
+        date: w.date,
+        memberName: w.memberId ? (memberById[w.memberId]?.name || 'Removed member') : 'General fund',
+        amount: w.amount,
+        recordedBy: w.recordedBy || '—',
+        detail: `${w.reason || 'No reason'} · Repaid: ${fmt(repaid)} · Remaining: ${fmt(w.amount - repaid)}`,
+        originalId: w.id,
+        canRemove: true
+      });
+    });
+
+    // EF Repayments
+    (data.efRepayments || []).forEach((r) => {
+      rows.push({
+        id: `r-${r.id}`,
+        type: 'repayment',
+        typeLabel: 'EF Repayment',
+        date: r.date,
+        memberName: memberById[r.memberId]?.name || 'Removed member',
+        amount: r.amount,
+        recordedBy: r.recordedBy || '—',
+        detail: `Repayment toward loan`,
+        originalId: r.id,
+        canRemove: true
+      });
+    });
+
+    // Removed entries (audit log)
+    (data.removedLog || []).forEach((r) => {
+      const e = r.removedEntry || {};
+      rows.push({
+        id: `rm-${r.id}`,
+        type: 'removed',
+        typeLabel: `Removed ${r.kind || 'entry'}`,
+        date: r.removedAt || new Date().toISOString(),
+        memberName: e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '—'),
+        amount: e.amount || 0,
+        recordedBy: r.removedBy || '—',
+        detail: `Originally recorded ${e.date ? new Date(e.date).toLocaleString() : '—'} by ${e.recordedBy || '—'}`,
+        canRemove: false
+      });
+    });
+
+    return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [data, memberById]);
+
+  const filteredTransactions = useMemo(() => {
+    return allTransactions.filter((t) => {
+      if (txType !== 'all' && t.type !== txType) return false;
+      if (txSearch.trim() && !t.memberName.toLowerCase().includes(txSearch.trim().toLowerCase())) return false;
+      if (txFrom && t.date.slice(0, 10) < txFrom) return false;
+      if (txTo && t.date.slice(0, 10) > txTo) return false;
+      return true;
+    });
+  }, [allTransactions, txType, txSearch, txFrom, txTo]);
+
+  // ============================================
+  // ACTIONS
+  // ============================================
+  function requireName() {
+    setEditingName(true);
+    setNotice({ type: "warning", text: "Enter your name at the top first." });
+    if (nameInputRef.current) nameInputRef.current.focus();
+  }
+
   function setNextOverride(id) {
     persist({ ...data, nextOverrideId: id || null });
   }
@@ -172,45 +331,47 @@ export default function SusuTracker() {
   function addMember() {
     const name = memberName.trim();
     if (!name) return;
-    if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
-      return;
-    }
+    if (!recorderName) { requireName(); return; }
     const next = {
       ...data,
-      members: [...data.members, { id: uid(), name, type: 'adult', order: data.members.length, recordedBy: recorderName }],
+      members: [...data.members, { id: uid(), name, type: memberType, order: data.members.length, recordedBy: recorderName }],
     };
     persist(next);
     setMemberName("");
+    // Log member addition in removedLog as audit
+    const logEntry = {
+      id: uid(),
+      kind: 'member_added',
+      removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    persist({ ...next, removedLog: [...next.removedLog, logEntry] });
   }
 
   function removeMember(id) {
-    const next = { ...data, members: data.members.filter((m) => m.id !== id) };
+    if (!recorderName) { requireName(); return; }
+    const member = data.members.find(m => m.id === id);
+    const logEntry = {
+      id: uid(),
+      kind: 'member_removed',
+      removedEntry: { memberName: member?.name || 'Unknown', memberId: id, recordedBy: recorderName },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    const next = {
+      ...data,
+      members: data.members.filter((m) => m.id !== id),
+      removedLog: [...data.removedLog, logEntry]
+    };
     persist(next);
-  }
-
-  function getMemberType(memberId) {
-    const member = data.members.find(m => m.id === memberId);
-    return member ? member.type : 'adult';
-  }
-
-  function getContributionAmount(memberId) {
-    const member = data.members.find(m => m.id === memberId);
-    if (!member) return 0;
-    return member.type === 'child' ? CHILD_CONTRIBUTION : ADULT_CONTRIBUTION;
   }
 
   function addContribution() {
     const member = data.members.find(m => m.id === cMember);
     if (!member) return;
-    const amount = getContributionAmount(cMember);
-    if (!cMember || amount <= 0) return;
-    if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
-      return;
-    }
+    if (!recorderName) { requireName(); return; }
+    const amount = getContributionAmount(member.type);
     const isChild = member.type === 'child';
     const potShare = isChild ? 0 : Math.round(amount * POT_PCT * 100) / 100;
     const efShare = isChild ? amount : Math.round((amount - potShare) * 100) / 100;
@@ -226,47 +387,62 @@ export default function SusuTracker() {
       recordedBy: recorderName,
     };
     persist({ ...data, contributions: [...data.contributions, entry] });
-    setCAmount("");
     setNotice(null);
+  }
+
+  function removeContribution(id) {
+    if (!recorderName) { requireName(); return; }
+    const removed = data.contributions.find((c) => c.id === id);
+    const logEntry = {
+      id: uid(),
+      kind: 'contribution',
+      removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    persist({
+      ...data,
+      contributions: data.contributions.filter((c) => c.id !== id),
+      removedLog: [...data.removedLog, logEntry],
+    });
   }
 
   function addPayout() {
     const amount = parseFloat(pAmount);
     if (!pMember || !amount || amount <= 0) return;
-    if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
-      return;
-    }
+    if (!recorderName) { requireName(); return; }
     if (amount > totals.potBalance) {
-      setNotice({
-        type: "warning",
-        text: `Heads up: this payout of ${fmt(amount)} is more than the pot balance of ${fmt(totals.potBalance)}. Recorded anyway.`,
-      });
-    } else {
-      setNotice(null);
-    }
+      setNotice({ type: "warning", text: `Heads up: this payout of ${fmt(amount)} is more than the pot balance of ${fmt(totals.potBalance)}. Recorded anyway.` });
+    } else { setNotice(null); }
     const entry = { id: uid(), memberId: pMember, month: pMonth, amount, date: new Date().toISOString(), recordedBy: recorderName };
     persist({ ...data, payouts: [...data.payouts, entry] });
     setPAmount("");
   }
 
+  function removePayout(id) {
+    if (!recorderName) { requireName(); return; }
+    const removed = data.payouts.find((p) => p.id === id);
+    const logEntry = {
+      id: uid(),
+      kind: 'payout',
+      removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    persist({
+      ...data,
+      payouts: data.payouts.filter((p) => p.id !== id),
+      removedLog: [...data.removedLog, logEntry],
+    });
+  }
+
   function addWithdrawal() {
     const amount = parseFloat(eAmount);
     if (!amount || amount <= 0) return;
-    if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
-      return;
-    }
+    if (!recorderName) { requireName(); return; }
     if (amount > totals.efBalance) {
-      setNotice({
-        type: "warning",
-        text: `Heads up: this withdrawal of ${fmt(amount)} is more than the emergency fund balance of ${fmt(totals.efBalance)}. Recorded anyway.`,
-      });
-    } else {
-      setNotice(null);
-    }
+      setNotice({ type: "warning", text: `Heads up: this withdrawal of ${fmt(amount)} is more than the emergency fund balance of ${fmt(totals.efBalance)}. Recorded anyway.` });
+    } else { setNotice(null); }
     const entry = {
       id: uid(),
       memberId: eMember || null,
@@ -274,8 +450,6 @@ export default function SusuTracker() {
       amount,
       date: new Date().toISOString(),
       recordedBy: recorderName,
-      repaid: 0,
-      remaining: amount
     };
     persist({ ...data, efWithdrawals: [...data.efWithdrawals, entry] });
     setEAmount("");
@@ -283,23 +457,37 @@ export default function SusuTracker() {
     setEMember("");
   }
 
+  function removeWithdrawal(id) {
+    if (!recorderName) { requireName(); return; }
+    const removed = data.efWithdrawals.find((w) => w.id === id);
+    const logEntry = {
+      id: uid(),
+      kind: 'withdrawal',
+      removedEntry: { ...removed, memberName: removed?.memberId ? (memberById[removed.memberId]?.name || 'Unknown') : 'General fund' },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    // Also remove associated repayments
+    const remainingRepayments = (data.efRepayments || []).filter(r => r.loanId !== id);
+    persist({
+      ...data,
+      efWithdrawals: data.efWithdrawals.filter((w) => w.id !== id),
+      efRepayments: remainingRepayments,
+      removedLog: [...data.removedLog, logEntry],
+    });
+  }
+
   function addRepayment(loanId, memberId, amount) {
     if (!amount || amount <= 0) return;
-    if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
-      return;
-    }
+    if (!recorderName) { requireName(); return; }
     const loan = data.efWithdrawals.find(w => w.id === loanId);
     if (!loan) return;
-    const newRepaid = (loan.repaid || 0) + amount;
-    const newRemaining = loan.amount - newRepaid;
-    const updatedLoans = data.efWithdrawals.map(w => {
-      if (w.id === loanId) {
-        return { ...w, repaid: newRepaid, remaining: newRemaining };
-      }
-      return w;
-    });
+    const alreadyRepaid = (data.efRepayments || []).filter(r => r.loanId === loanId).reduce((s, r) => s + r.amount, 0);
+    const remaining = loan.amount - alreadyRepaid;
+    if (amount > remaining) {
+      setNotice({ type: "error", text: `Repayment amount exceeds remaining balance of ${fmt(remaining)}.` });
+      return;
+    }
     const repaymentEntry = {
       id: uid(),
       loanId,
@@ -309,9 +497,47 @@ export default function SusuTracker() {
       recordedBy: recorderName
     };
     const repayments = [...(data.efRepayments || []), repaymentEntry];
-    persist({ ...data, efWithdrawals: updatedLoans, efRepayments: repayments });
+    persist({ ...data, efRepayments: repayments });
+    setRepayLoanId(null);
+    setRepayAmount("");
+    setNotice({ type: "warning", text: `Repayment of ${fmt(amount)} recorded. Remaining: ${fmt(remaining - amount)}` });
   }
 
+  function removeRepayment(id) {
+    if (!recorderName) { requireName(); return; }
+    const removed = (data.efRepayments || []).find(r => r.id === id);
+    if (!removed) return;
+    const logEntry = {
+      id: uid(),
+      kind: 'repayment',
+      removedEntry: { ...removed, memberName: memberById[removed.memberId]?.name || 'Unknown' },
+      removedAt: new Date().toISOString(),
+      removedBy: recorderName
+    };
+    persist({
+      ...data,
+      efRepayments: (data.efRepayments || []).filter(r => r.id !== id),
+      removedLog: [...data.removedLog, logEntry],
+    });
+  }
+
+  function removeTransaction(entry) {
+    if (!entry.canRemove) {
+      setNotice({ type: "error", text: "This transaction cannot be removed (audit log)." });
+      return;
+    }
+    if (!recorderName) { requireName(); return; }
+    const type = entry.type;
+    if (type === 'contribution') removeContribution(entry.originalId);
+    else if (type === 'payout') removePayout(entry.originalId);
+    else if (type === 'withdrawal') removeWithdrawal(entry.originalId);
+    else if (type === 'repayment') removeRepayment(entry.originalId);
+    else setNotice({ type: "error", text: "Cannot remove this type of entry." });
+  }
+
+  // ============================================
+  // RENDER
+  // ============================================
   if (!loaded) {
     return (
       <div style={styles.loadingWrap}>
@@ -329,6 +555,7 @@ export default function SusuTracker() {
   return (
     <div style={styles.app}>
       <style>{globalCss}</style>
+
       <header style={styles.hero}>
         <div style={styles.heroTop}>
           <div>
@@ -369,12 +596,7 @@ export default function SusuTracker() {
           <div style={styles.wheelCol}>
             <svg width={wheelSize} height={wheelSize} viewBox={`0 0 ${wheelSize} ${wheelSize}`} role="img" aria-label="Payout rotation wheel">
               <circle cx={center} cy={center} r={radius + 34} fill="none" stroke="#2F6B44" strokeWidth="1" />
-              {n === 0 && (
-                <text x={center} y={center} textAnchor="middle" fill="#A9C9AE" fontSize="12" fontFamily="var(--body)">Add members to</text>
-              )}
-              {n === 0 && (
-                <text x={center} y={center + 16} textAnchor="middle" fill="#A9C9AE" fontSize="12" fontFamily="var(--body)">start the circle</text>
-              )}
+              {n === 0 && <text x={center} y={center} textAnchor="middle" fill="#A9C9AE" fontSize="12" fontFamily="var(--body)">Add members to start</text>}
               {perMember.map((m, i) => {
                 const angle = (2 * Math.PI * i) / n - Math.PI / 2;
                 const x = center + radius * Math.cos(angle);
@@ -434,17 +656,21 @@ export default function SusuTracker() {
           </div>
         </div>
       </header>
+
       {notice && (
         <div style={notice.type === "warning" ? styles.noticeWarning : styles.noticeError}>
           {notice.text}
         </div>
       )}
+
       <nav style={styles.tabs}>
         {[
           ["overview", "Members"],
           ["contributions", "Contributions"],
           ["payouts", "Payouts"],
-          ["fund", "Emergency fund"],
+          ["fund", "Emergency Fund"],
+          ["loans", "Loans"],
+          ["transactions", "Transactions"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -455,7 +681,9 @@ export default function SusuTracker() {
           </button>
         ))}
       </nav>
+
       <main style={styles.main}>
+        {/* ===== MEMBERS ===== */}
         {tab === "overview" && (
           <section>
             <div style={styles.formRow}>
@@ -466,7 +694,7 @@ export default function SusuTracker() {
                 onChange={(e) => setMemberName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") addMember(); }}
               />
-              <select style={styles.input} value="adult" onChange={() => {}}>
+              <select style={styles.input} value={memberType} onChange={(e) => setMemberType(e.target.value)}>
                 <option value="adult">Adult ($50)</option>
                 <option value="child">Child ($25)</option>
               </select>
@@ -492,9 +720,7 @@ export default function SusuTracker() {
                     <tr key={m.id}>
                       <td style={styles.td} data-label="Member">
                         {m.name}
-                        {nextRecipient && nextRecipient.id === m.id && (
-                          <span style={styles.nextTag}>next</span>
-                        )}
+                        {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
                       </td>
                       <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
                       <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
@@ -511,6 +737,8 @@ export default function SusuTracker() {
             )}
           </section>
         )}
+
+        {/* ===== CONTRIBUTIONS ===== */}
         {tab === "contributions" && (
           <section>
             <div style={styles.formGrid}>
@@ -522,15 +750,15 @@ export default function SusuTracker() {
               </select>
               <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
               {cMember && (
-                <input style={styles.input} type="number" value={getContributionAmount(cMember)} readOnly disabled placeholder="Amount" />
+                <input style={styles.input} type="number" value={getContributionAmount(data.members.find(m => m.id === cMember)?.type || 'adult')} readOnly disabled placeholder="Amount" />
               )}
               <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
             </div>
             {cMember && data.members.find(m => m.id === cMember) && (
               <p style={styles.splitPreview}>
-                {data.members.find(m => m.id === cMember).type === 'child' 
-                  ? `Child contribution: $${getContributionAmount(cMember)} goes 100% to Emergency Fund`
-                  : `Adult contribution: $${getContributionAmount(cMember)} splits into ${fmt(ADULT_CONTRIBUTION * POT_PCT)} to the pot and ${fmt(ADULT_CONTRIBUTION * EF_PCT)} to the emergency fund.`
+                {data.members.find(m => m.id === cMember).type === 'child'
+                  ? `Child contribution: $${getContributionAmount('child')} goes 100% to Emergency Fund`
+                  : `Adult contribution: $${getContributionAmount('adult')} splits into ${fmt(ADULT_CONTRIBUTION * POT_PCT)} to the pot and ${fmt(ADULT_CONTRIBUTION * EF_PCT)} to the emergency fund.`
                 }
               </p>
             )}
@@ -547,27 +775,31 @@ export default function SusuTracker() {
                     <th style={styles.th}>To pot</th>
                     <th style={styles.th}>To fund</th>
                     <th style={styles.th}>Recorded By</th>
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[...data.contributions]
-                    .sort((a, b) => (a.date < b.date ? 1 : -1))
-                    .map((c) => (
-                      <tr key={c.id}>
-                        <td style={styles.td} data-label="Month">{monthLabel(c.month)}</td>
-                        <td style={styles.td} data-label="Member">{memberById[c.memberId]?.name || "Removed member"}</td>
-                        <td style={styles.td} data-label="Type">{c.memberType === 'child' ? 'Child' : 'Adult'}</td>
-                        <td style={styles.td} data-label="Amount">{fmt(c.amount)}</td>
-                        <td style={styles.td} data-label="To pot">{fmt(c.potShare)}</td>
-                        <td style={styles.td} data-label="To fund">{fmt(c.efShare)}</td>
-                        <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
-                      </tr>
-                    ))}
+                  {[...data.contributions].sort((a, b) => (a.date < b.date ? 1 : -1)).map((c) => (
+                    <tr key={c.id}>
+                      <td style={styles.td} data-label="Month">{monthLabel(c.month)}</td>
+                      <td style={styles.td} data-label="Member">{memberById[c.memberId]?.name || "Removed member"}</td>
+                      <td style={styles.td} data-label="Type">{c.memberType === 'child' ? 'Child' : 'Adult'}</td>
+                      <td style={styles.td} data-label="Amount">{fmt(c.amount)}</td>
+                      <td style={styles.td} data-label="To pot">{fmt(c.potShare || 0)}</td>
+                      <td style={styles.td} data-label="To fund">{fmt(c.efShare || 0)}</td>
+                      <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
+                      <td style={styles.td}>
+                        <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}
           </section>
         )}
+
+        {/* ===== PAYOUTS ===== */}
         {tab === "payouts" && (
           <section>
             <div style={styles.formGrid}>
@@ -592,24 +824,28 @@ export default function SusuTracker() {
                     <th style={styles.th}>Member</th>
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[...data.payouts]
-                    .sort((a, b) => (a.date < b.date ? 1 : -1))
-                    .map((p) => (
-                      <tr key={p.id}>
-                        <td style={styles.td} data-label="Month">{monthLabel(p.month)}</td>
-                        <td style={styles.td} data-label="Member">{memberById[p.memberId]?.name || "Removed member"}</td>
-                        <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
-                        <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
-                      </tr>
-                    ))}
+                  {[...data.payouts].sort((a, b) => (a.date < b.date ? 1 : -1)).map((p) => (
+                    <tr key={p.id}>
+                      <td style={styles.td} data-label="Month">{monthLabel(p.month)}</td>
+                      <td style={styles.td} data-label="Member">{memberById[p.memberId]?.name || "Removed member"}</td>
+                      <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
+                      <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
+                      <td style={styles.td}>
+                        <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             )}
           </section>
         )}
+
+        {/* ===== EMERGENCY FUND ===== */}
         {tab === "fund" && (
           <section>
             <div style={styles.fundBalanceCard}>
@@ -628,6 +864,7 @@ export default function SusuTracker() {
               <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
               <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
             </div>
+
             {data.efWithdrawals.length === 0 ? (
               <p style={styles.empty}>No withdrawals recorded yet.</p>
             ) : (
@@ -643,25 +880,144 @@ export default function SusuTracker() {
                       <th style={styles.th}>Repaid</th>
                       <th style={styles.th}>Remaining</th>
                       <th style={styles.th}>Recorded By</th>
+                      <th style={styles.th}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {[...data.efWithdrawals]
-                      .sort((a, b) => (a.date < b.date ? 1 : -1))
-                      .map((w) => (
+                    {[...data.efWithdrawals].sort((a, b) => (a.date < b.date ? 1 : -1)).map((w) => {
+                      const repaid = (data.efRepayments || []).filter(r => r.loanId === w.id).reduce((s, r) => s + r.amount, 0);
+                      const remaining = w.amount - repaid;
+                      return (
                         <tr key={w.id}>
                           <td style={styles.td} data-label="Date">{new Date(w.date).toLocaleDateString()}</td>
                           <td style={styles.td} data-label="Member">{w.memberId ? (memberById[w.memberId]?.name || "Removed member") : "General fund"}</td>
                           <td style={styles.td} data-label="Reason">{w.reason}</td>
                           <td style={styles.td} data-label="Amount">{fmt(w.amount)}</td>
-                          <td style={styles.td} data-label="Repaid">{fmt(w.repaid || 0)}</td>
-                          <td style={styles.td} data-label="Remaining">{fmt(w.remaining || w.amount)}</td>
+                          <td style={styles.td} data-label="Repaid">{fmt(repaid)}</td>
+                          <td style={styles.td} data-label="Remaining">{fmt(remaining)}</td>
                           <td style={styles.td} data-label="Recorded By">{w.recordedBy ? `Recorded By ${w.recordedBy}` : "—"}</td>
+                          <td style={styles.td} data-label="Actions">
+                            {remaining > 0.01 && (
+                              <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
+                            )}
+                            <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
+                          </td>
                         </tr>
-                      ))}
+                      );
+                    })}
                   </tbody>
                 </table>
+
+                {repayLoanId && (
+                  <div style={{ ...styles.formGrid, marginTop: 12, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
+                    <span style={{ fontWeight: 600, alignSelf: "center" }}>Repay loan for {memberById[data.efWithdrawals.find(w => w.id === repayLoanId)?.memberId]?.name || 'member'}</span>
+                    <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={repayAmount} onChange={(e) => setRepayAmount(e.target.value)} />
+                    <button style={styles.btnPrimary} onClick={() => addRepayment(repayLoanId, data.efWithdrawals.find(w => w.id === repayLoanId)?.memberId, parseFloat(repayAmount))}>Submit Repayment</button>
+                    <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(null); setRepayAmount(""); }}>Cancel</button>
+                  </div>
+                )}
               </div>
+            )}
+          </section>
+        )}
+
+        {/* ===== LOANS ===== */}
+        {tab === "loans" && (
+          <section>
+            <h3 style={{ marginBottom: 12 }}>Outstanding Emergency Fund Loans</h3>
+            {loansOutstanding.length === 0 ? (
+              <p style={styles.empty}>No outstanding loans. All emergency fund withdrawals have been fully repaid.</p>
+            ) : (
+              <table style={styles.table} className="rtable">
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Date</th>
+                    <th style={styles.th}>Member</th>
+                    <th style={styles.th}>Reason</th>
+                    <th style={styles.th}>Total</th>
+                    <th style={styles.th}>Repaid</th>
+                    <th style={styles.th}>Remaining</th>
+                    <th style={styles.th}>Recorded By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loansOutstanding.map((w) => (
+                    <tr key={w.id}>
+                      <td style={styles.td} data-label="Date">{new Date(w.date).toLocaleDateString()}</td>
+                      <td style={styles.td} data-label="Member">{w.memberId ? (memberById[w.memberId]?.name || "Removed member") : "General fund"}</td>
+                      <td style={styles.td} data-label="Reason">{w.reason}</td>
+                      <td style={styles.td} data-label="Total">{fmt(w.amount)}</td>
+                      <td style={styles.td} data-label="Repaid">{fmt(w.repaid)}</td>
+                      <td style={styles.td} data-label="Remaining" style={{ fontWeight: 600, color: "#9C4A2E" }}>{fmt(w.remaining)}</td>
+                      <td style={styles.td} data-label="Recorded By">{w.recordedBy ? `Recorded By ${w.recordedBy}` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        )}
+
+        {/* ===== TRANSACTIONS ===== */}
+        {tab === "transactions" && (
+          <section>
+            <p style={styles.hint}>Full audit log of every transaction. Items marked "removed" cannot be deleted — they are kept for audit purposes.</p>
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={txType} onChange={(e) => setTxType(e.target.value)}>
+                <option value="all">All types</option>
+                <option value="contribution">Contributions</option>
+                <option value="payout">Payouts</option>
+                <option value="withdrawal">Emergency Withdrawals</option>
+                <option value="repayment">EF Repayments</option>
+                <option value="removed">Removed entries</option>
+              </select>
+              <input style={styles.input} placeholder="Search by member name" value={txSearch} onChange={(e) => setTxSearch(e.target.value)} />
+              <input style={styles.input} type="date" value={txFrom} onChange={(e) => setTxFrom(e.target.value)} title="From date" />
+              <input style={styles.input} type="date" value={txTo} onChange={(e) => setTxTo(e.target.value)} title="To date" />
+              {(txType !== "all" || txSearch || txFrom || txTo) && (
+                <button style={styles.btnGhostSmall} onClick={() => { setTxType("all"); setTxSearch(""); setTxFrom(""); setTxTo(""); }}>
+                  Clear filters
+                </button>
+              )}
+            </div>
+
+            {filteredTransactions.length === 0 ? (
+              <p style={styles.empty}>No transactions match these filters.</p>
+            ) : (
+              <table style={styles.table} className="rtable">
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Date &amp; time</th>
+                    <th style={styles.th}>Type</th>
+                    <th style={styles.th}>Member</th>
+                    <th style={styles.th}>Amount</th>
+                    <th style={styles.th}>Recorded By</th>
+                    <th style={styles.th}>Details</th>
+                    <th style={styles.th}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTransactions.map((t) => (
+                    <tr key={t.id}>
+                      <td style={styles.td} data-label="Date & time">{new Date(t.date).toLocaleString()}</td>
+                      <td style={styles.td} data-label="Type">
+                        {t.typeLabel}
+                        {t.type === "removed" && <span style={styles.nextTag}>removed</span>}
+                      </td>
+                      <td style={styles.td} data-label="Member">{t.memberName}</td>
+                      <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
+                      <td style={styles.td} data-label="Recorded By">{t.recordedBy}</td>
+                      <td style={styles.td} data-label="Details">{t.detail}</td>
+                      <td style={styles.td} data-label="Actions">
+                        {t.canRemove && (
+                          <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
+                        )}
+                        {!t.canRemove && <span style={{ fontSize: 11, color: "#8A8471" }}>Audit</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </section>
         )}
@@ -670,6 +1026,9 @@ export default function SusuTracker() {
   );
 }
 
+// ============================================
+// STYLES
+// ============================================
 const globalCss = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
 :root {
