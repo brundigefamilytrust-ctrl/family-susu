@@ -1,6 +1,7 @@
 /* eslint-disable */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { Analytics } from '@vercel/analytics/react';
 
 // ============================================
 // SUPABASE CONFIG
@@ -2000,6 +2001,7 @@ The user can then re-enable password protection with a new password.
           )}
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
