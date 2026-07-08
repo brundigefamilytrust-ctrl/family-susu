@@ -77,6 +77,13 @@ export default function SusuTracker() {
   const [passwordInput, setPasswordInput] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  // Store password session flag in sessionStorage so it persists across page reloads in same session
+  const [sessionAuthorized, setSessionAuthorized] = useState(() => {
+    // Check if we already have a valid session
+    return sessionStorage.getItem('susu_password_authorized') === 'true';
+  });
+  // For settings: show password hidden by default
+  const [showPasswordText, setShowPasswordText] = useState(false);
 
   // ----- View-only mode -----
   const isViewOnly = useMemo(() => {
@@ -136,7 +143,6 @@ export default function SusuTracker() {
       if (error) throw error;
       if (result && result.value) {
         const parsed = result.value;
-        // Ensure settings exist
         if (!parsed.settings) {
           parsed.settings = { requirePassword: false, password: '' };
         }
@@ -148,7 +154,6 @@ export default function SusuTracker() {
         if (isNewer) {
           setData({ ...emptyData, ...parsed });
           lastKnownUpdatedAt.current = remoteUpdatedAt;
-          // Update password toggle state
           setPasswordToggle(parsed.settings?.requirePassword || false);
         }
       }
@@ -196,6 +201,11 @@ export default function SusuTracker() {
       setNotice({ type: "warning", text: "Enter your name at the top first." });
       return;
     }
+    // If already authorized this session, skip password
+    if (sessionAuthorized) {
+      action();
+      return;
+    }
     if (requiresPasswordCheck()) {
       setPendingAction({ action, actionName });
       setPasswordInput("");
@@ -213,6 +223,9 @@ export default function SusuTracker() {
       setPasswordInput("");
       return;
     }
+    // Password correct — authorize session
+    setSessionAuthorized(true);
+    sessionStorage.setItem('susu_password_authorized', 'true');
     setShowPasswordModal(false);
     if (pendingAction) {
       pendingAction.action();
@@ -244,7 +257,6 @@ export default function SusuTracker() {
     const efOut = data.efWithdrawals.reduce((s, w) => s + w.amount, 0);
     const efRepaid = data.efRepayments ? data.efRepayments.reduce((s, r) => s + r.amount, 0) : 0;
     
-    // Calculate transfers
     const transfers = data.transfers || [];
     let efToPotTotal = 0;
     let potToEfTotal = 0;
@@ -321,7 +333,7 @@ export default function SusuTracker() {
   }, [data.efWithdrawals, data.efRepayments]);
 
   // ============================================
-  // ALL TRANSACTIONS
+  // ALL TRANSACTIONS (with fixed labels for member_added/removed)
   // ============================================
   const allTransactions = useMemo(() => {
     const rows = [];
@@ -407,18 +419,41 @@ export default function SusuTracker() {
       });
     });
 
-    // Removed entries (audit log)
+    // Removed entries (audit log) — handle member_added and member_removed separately
     (data.removedLog || []).forEach((r) => {
       const e = r.removedEntry || {};
+      let typeLabel = '';
+      let memberNameDisplay = '';
+      let detailText = '';
+      let amountDisplay = e.amount || 0;
+
+      if (r.kind === 'member_added') {
+        typeLabel = 'Member Added';
+        memberNameDisplay = e.memberName || 'Unknown';
+        detailText = `Added as ${e.memberType || 'member'}`;
+        amountDisplay = 0;
+      } else if (r.kind === 'member_removed') {
+        typeLabel = 'Member Removed';
+        memberNameDisplay = e.memberName || 'Unknown';
+        detailText = `Removed from group`;
+        amountDisplay = 0;
+      } else {
+        // Other kinds (contribution, payout, withdrawal, etc.)
+        typeLabel = `Removed ${r.kind || 'entry'}`;
+        memberNameDisplay = e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '—');
+        detailText = `Originally recorded ${e.date ? new Date(e.date).toLocaleString() : '—'} by ${e.recordedBy || '—'}`;
+        amountDisplay = e.amount || 0;
+      }
+
       rows.push({
         id: `rm-${r.id}`,
         type: 'removed',
-        typeLabel: `Removed ${r.kind || 'entry'}`,
+        typeLabel: typeLabel,
         date: r.removedAt || new Date().toISOString(),
-        memberName: e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '—'),
-        amount: e.amount || 0,
+        memberName: memberNameDisplay,
+        amount: amountDisplay,
         recordedBy: r.removedBy || '—',
-        detail: `Originally recorded ${e.date ? new Date(e.date).toLocaleString() : '—'} by ${e.recordedBy || '—'}`,
+        detail: detailText,
         canRemove: false
       });
     });
@@ -463,6 +498,7 @@ export default function SusuTracker() {
       };
       persist(next);
       setMemberName("");
+      // Log member addition with kind 'member_added'
       const logEntry = {
         id: uid(),
         kind: 'member_added',
@@ -681,7 +717,6 @@ export default function SusuTracker() {
     }
     const action = () => {
       const direction = transferDirection;
-      // Check if transfer would cause negative balance
       if (direction === 'ef-to-pot' && amount > totals.efBalance) {
         setNotice({ type: "error", text: `Insufficient funds in Emergency Fund. Available: ${fmt(totals.efBalance)}` });
         setShowTransferModal(false);
@@ -740,7 +775,10 @@ export default function SusuTracker() {
         password: passwordToggle ? newPassword : ''
       };
       persist({ ...data, settings });
-      setNotice({ type: "warning", text: passwordToggle ? `Password protection enabled. Password is: "${newPassword}"` : "Password protection disabled." });
+      setNotice({ type: "warning", text: passwordToggle ? `Password protection enabled.` : "Password protection disabled." });
+      // Reset session auth when password changes
+      sessionStorage.removeItem('susu_password_authorized');
+      setSessionAuthorized(false);
     };
     wrapWithPasswordCheck(action, 'Update password settings');
   }
@@ -1141,7 +1179,6 @@ export default function SusuTracker() {
                       setNotice({ type: "error", text: "Please enter a justification." });
                       return;
                     }
-                    // Show confirmation modal with justification
                     setShowTransferModal(true);
                   }}>Execute Transfer</button>
                 </div>
@@ -1296,7 +1333,7 @@ export default function SusuTracker() {
         {/* ===== TRANSACTIONS ===== */}
         {tab === "transactions" && (
           <section>
-            <p style={styles.hint}>Full audit log of every transaction. Items marked "removed" cannot be deleted — they are kept for audit purposes.</p>
+            <p style={styles.hint}>Full audit log of every transaction. Items marked with "Audit" cannot be deleted.</p>
             <div style={styles.formGrid}>
               <select style={styles.input} value={txType} onChange={(e) => setTxType(e.target.value)}>
                 <option value="all">All types</option>
@@ -1305,7 +1342,7 @@ export default function SusuTracker() {
                 <option value="withdrawal">Emergency Withdrawals</option>
                 <option value="repayment">EF Repayments</option>
                 <option value="transfer">Transfers</option>
-                <option value="removed">Removed entries</option>
+                <option value="removed">Audit Log</option>
               </select>
               <input style={styles.input} placeholder="Search by member name" value={txSearch} onChange={(e) => setTxSearch(e.target.value)} />
               <input style={styles.input} type="date" value={txFrom} onChange={(e) => setTxFrom(e.target.value)} title="From date" />
@@ -1338,7 +1375,7 @@ export default function SusuTracker() {
                       <td style={styles.td} data-label="Date & time">{new Date(t.date).toLocaleString()}</td>
                       <td style={styles.td} data-label="Type">
                         {t.typeLabel}
-                        {t.type === "removed" && <span style={styles.nextTag}>removed</span>}
+                        {t.type === "removed" && <span style={styles.nextTag}>Audit</span>}
                       </td>
                       <td style={styles.td} data-label="Member">{t.memberName}</td>
                       <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
@@ -1373,7 +1410,8 @@ export default function SusuTracker() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
                     <label style={{ fontWeight: 600 }}>Password Protection</label>
                     <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
-                      When enabled, all write actions (add, remove, transfer, repay) will require a password.
+                      When enabled, all write actions (add, remove, transfer, repay) will require a password. 
+                      You only need to enter it once per browser session.
                     </p>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1384,11 +1422,12 @@ export default function SusuTracker() {
                         onChange={(e) => {
                           setPasswordToggle(e.target.checked);
                           if (!e.target.checked) {
-                            // If turning off, clear password
                             const settings = { requirePassword: false, password: '' };
                             persist({ ...data, settings });
                             setNewPassword("");
                             setNotice({ type: "warning", text: "Password protection disabled." });
+                            sessionStorage.removeItem('susu_password_authorized');
+                            setSessionAuthorized(false);
                           }
                         }}
                       />
@@ -1401,7 +1440,7 @@ export default function SusuTracker() {
                   <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
                     <input
                       style={styles.input}
-                      type="text"
+                      type={showPasswordText ? "text" : "password"}
                       placeholder="Set new password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
@@ -1414,11 +1453,23 @@ export default function SusuTracker() {
                       const settings = { requirePassword: true, password: newPassword.trim() };
                       persist({ ...data, settings });
                       setPasswordToggle(true);
-                      setNotice({ type: "warning", text: `Password set to: "${newPassword.trim()}"` });
+                      setNotice({ type: "warning", text: `Password protection enabled.` });
+                      // Show password briefly
+                      setShowPasswordText(true);
+                      setTimeout(() => setShowPasswordText(false), 5000);
                     }}>Set Password</button>
                     {data.settings?.password && (
-                      <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A" }}>
-                        Current password: <strong>{data.settings.password}</strong>
+                      <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
+                        Current password: 
+                        <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
+                          {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
+                        </span>
+                        <button 
+                          style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
+                          onClick={() => setShowPasswordText(!showPasswordText)}
+                        >
+                          {showPasswordText ? 'Hide' : 'Show'}
+                        </button>
                       </span>
                     )}
                   </div>
@@ -1473,6 +1524,12 @@ export default function SusuTracker() {
                     }}>Copy Link</button>
                   </div>
                 </div>
+
+                {sessionAuthorized && (
+                  <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
+                    <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
+                  </div>
+                )}
               </>
             )}
           </section>
@@ -1485,6 +1542,7 @@ export default function SusuTracker() {
           <div style={styles.modal}>
             <h3 style={{ marginTop: 0 }}>🔒 Password Required</h3>
             <p>Enter the password to perform: <strong>{pendingAction?.actionName || 'this action'}</strong></p>
+            <p style={{ fontSize: 12, color: "#5F5E5A" }}>You only need to enter this once per session.</p>
             <input
               style={{ ...styles.input, width: "100%", marginTop: 8 }}
               type="password"
