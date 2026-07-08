@@ -1,6 +1,7 @@
 /* eslint-disable */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { Analytics } from '@vercel/analytics/react';
 
 // ============================================
 // SUPABASE CONFIG
@@ -719,7 +720,7 @@ export default function SusuTracker() {
         amountDisplay = 0;
       } else {
         typeLabel = `Removed ${r.kind || 'entry'}`;
-        memberNameDisplay = e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '—');
+        memberNameDisplay = e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '��');
         detailText = `Originally recorded ${e.date ? new Date(e.date).toLocaleString() : '—'} by ${e.recordedBy || '—'}`;
         amountDisplay = e.amount || 0;
       }
@@ -2000,6 +2001,7 @@ The user can then re-enable password protection with a new password.
           )}
         </div>
       )}
+      <Analytics />
     </div>
   );
 }
