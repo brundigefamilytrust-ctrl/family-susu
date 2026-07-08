@@ -42,6 +42,79 @@ function getContributionAmount(memberType) {
   return memberType === 'child' ? CHILD_CONTRIBUTION : ADULT_CONTRIBUTION;
 }
 
+function getTodayEastern() {
+  const now = new Date();
+  const eastern = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+  const [month, day, year] = eastern.split('/');
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function getCurrentMonthEastern() {
+  const now = new Date();
+  const eastern = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit'
+  }).format(now);
+  const [month, year] = eastern.split('/');
+  return `${year}-${month.padStart(2, '0')}`;
+}
+
+function formatEasternDate(isoString) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  const eastern = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  }).format(d);
+  return eastern;
+}
+
+function formatEasternDateShort(isoString) {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  const eastern = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  }).format(d);
+  return eastern;
+}
+
+function getUTCDateRange(localDateStr) {
+  const parts = localDateStr.split('-');
+  const year = parseInt(parts[0]);
+  const month = parseInt(parts[1]) - 1;
+  const day = parseInt(parts[2]);
+  const startLocal = new Date(year, month, day, 0, 0, 0);
+  const endLocal = new Date(year, month, day, 23, 59, 59);
+  return {
+    startUTC: startLocal.toISOString(),
+    endUTC: endLocal.toISOString()
+  };
+}
+
+// Mask full name: first name + last initial
+function maskName(fullName) {
+  if (!fullName) return '';
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const firstName = parts[0];
+  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+  return `${firstName} ${lastInitial}.`;
+}
+
 const emptyData = {
   members: [],
   contributions: [],
@@ -263,14 +336,11 @@ export default function SusuTracker() {
   }
 
   async function persist(nextRaw) {
-    // Check for conflicts
     const currentVersion = lastKnownVersion.current;
     const nextVersion = (nextRaw.version || 0) + 1;
     const next = { ...nextRaw, version: nextVersion, updatedAt: new Date().toISOString() };
     
-    // Try to save with version check via Supabase
     try {
-      // First, get the current data to check version
       const { data: current, error: fetchError } = await supabase
         .from('app_state')
         .select('value')
@@ -284,18 +354,15 @@ export default function SusuTracker() {
         const dbVersion = currentParsed.version || 0;
         
         if (dbVersion !== currentVersion) {
-          // Conflict detected
           setNotice({ 
             type: "error", 
             text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.` 
           });
-          // Reload data
           await loadShared();
           return;
         }
       }
       
-      // No conflict — proceed with save
       const { error } = await supabase
         .from('app_state')
         .upsert({ key: 'susu_data', value: next }, { onConflict: 'key' });
@@ -418,6 +485,8 @@ export default function SusuTracker() {
     return map;
   }, [data.members]);
 
+  const memberCount = data.members.length;
+
   const totals = useMemo(() => {
     const totalCollected = data.contributions.reduce((s, c) => s + c.amount, 0);
     const potIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? 0 : (c.potShare || 0)), 0);
@@ -467,7 +536,55 @@ export default function SusuTracker() {
       const efRepaid = data.efRepayments
         .filter((r) => r.memberId === m.id)
         .reduce((s, r) => s + r.amount, 0);
-      return { ...m, contributed, received, lastPayoutDate: lastPayout ? lastPayout.date : null, efReceived, efRepaid, efBalance: efReceived - efRepaid };
+      
+      const currentMonth = getCurrentMonthEastern();
+      const contributionsThisMonth = data.contributions.filter(c => c.memberId === m.id && c.month === currentMonth);
+      const paidThisMonth = contributionsThisMonth.length > 0;
+      
+      const allMonths = data.contributions
+        .filter(c => c.memberId === m.id)
+        .map(c => c.month)
+        .filter(m => m && m.length === 7);
+      const uniqueMonths = [...new Set(allMonths)].sort();
+      const currentMonthIndex = uniqueMonths.indexOf(currentMonth);
+      let prepaidCount = 0;
+      if (currentMonthIndex !== -1) {
+        for (let i = currentMonthIndex + 1; i < uniqueMonths.length; i++) {
+          prepaidCount++;
+        }
+      }
+      
+      let status = 'red';
+      let statusLabel = 'Late';
+      if (paidThisMonth) {
+        status = 'green';
+        statusLabel = 'Current';
+      } else {
+        const lastMonth = new Date();
+        lastMonth.setMonth(lastMonth.getMonth() - 1);
+        const lastMonthStr = lastMonth.getFullYear() + '-' + String(lastMonth.getMonth()+1).padStart(2, '0');
+        const paidLastMonth = data.contributions.some(c => c.memberId === m.id && c.month === lastMonthStr);
+        if (paidLastMonth) {
+          status = 'yellow';
+          statusLabel = 'Not Current (Paid Last Month)';
+        } else {
+          status = 'red';
+          statusLabel = 'Late';
+        }
+      }
+      
+      return { 
+        ...m, 
+        contributed, 
+        received, 
+        lastPayoutDate: lastPayout ? lastPayout.date : null, 
+        efReceived, 
+        efRepaid, 
+        efBalance: efReceived - efRepaid,
+        status,
+        statusLabel,
+        prepaidCount
+      };
     });
   }, [data.members, data.contributions, data.payouts, data.efWithdrawals, data.efRepayments]);
 
@@ -627,8 +744,16 @@ export default function SusuTracker() {
     return allTransactions.filter((t) => {
       if (txType !== 'all' && t.type !== txType) return false;
       if (txSearch.trim() && !t.memberName.toLowerCase().includes(txSearch.trim().toLowerCase())) return false;
-      if (txFrom && t.date.slice(0, 10) < txFrom) return false;
-      if (txTo && t.date.slice(0, 10) > txTo) return false;
+      
+      if (txFrom) {
+        const { startUTC } = getUTCDateRange(txFrom);
+        if (t.date < startUTC) return false;
+      }
+      if (txTo) {
+        const { endUTC } = getUTCDateRange(txTo);
+        if (t.date > endUTC) return false;
+      }
+      
       return true;
     });
   }, [allTransactions, txType, txSearch, txFrom, txTo]);
@@ -998,6 +1123,18 @@ The user can then re-enable password protection with a new password.
   const radius = 96;
   const n = perMember.length;
 
+  // Tabs for view-only: only "overview"
+  const allTabs = [
+    ["overview", "Members"],
+    ["contributions", "Contributions"],
+    ["payouts", "Payouts"],
+    ["fund", "Emergency Fund"],
+    ["loans", "Loans"],
+    ["transactions", "Transactions"],
+    ["settings", "Settings"],
+  ];
+  const visibleTabs = isViewOnly ? allTabs.filter(([key]) => key === "overview") : allTabs;
+
   return (
     <div style={styles.app}>
       <style>{globalCss}</style>
@@ -1018,9 +1155,27 @@ The user can then re-enable password protection with a new password.
 
       <header style={styles.hero}>
         <div style={styles.heroTop}>
-          <div>
-            <p style={styles.eyebrow}>Ledger</p>
-            <h1 style={styles.h1}>Brundige Family Trust</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div>
+              <p style={styles.eyebrow}>Ledger</p>
+              <h1 style={styles.h1}>Brundige Family Trust</h1>
+            </div>
+            {/* Est. 2026 Badge */}
+            <div style={{
+              background: "rgba(201,150,43,0.15)",
+              border: "1px solid #C9962B",
+              borderRadius: "8px",
+              padding: "6px 12px",
+              color: "#F3D48A",
+              fontSize: "12px",
+              textAlign: "center",
+              lineHeight: "1.3",
+              whiteSpace: "nowrap",
+              marginLeft: "auto"
+            }}>
+              <div style={{ fontWeight: 700 }}>Est. 2026</div>
+              <div style={{ fontSize: "10px", opacity: 0.8 }}>{memberCount} members • And growing</div>
+            </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
             <div style={styles.splitBadge}>
@@ -1129,15 +1284,7 @@ The user can then re-enable password protection with a new password.
       )}
 
       <nav style={styles.tabs}>
-        {[
-          ["overview", "Members"],
-          ["contributions", "Contributions"],
-          ["payouts", "Payouts"],
-          ["fund", "Emergency Fund"],
-          ["loans", "Loans"],
-          ["transactions", "Transactions"],
-          ["settings", "Settings"],
-        ].map(([key, label]) => (
+        {visibleTabs.map(([key, label]) => (
           <button
             key={key}
             onClick={() => {
@@ -1174,6 +1321,15 @@ The user can then re-enable password protection with a new password.
                 <button style={styles.btnPrimary} type="button" onClick={addMember}>Add member</button>
               </div>
             )}
+
+            {/* Legend */}
+            <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
+              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
+              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not current (paid last month)</span>
+              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#C62828", marginRight: 4 }}></span> Late (no payment this or last month)</span>
+              <span style={{ color: "#5F5E5A" }}>| Prepaid: <strong>N</strong> months ahead</span>
+            </div>
+
             {perMember.length === 0 ? (
               <p style={styles.empty}>No members yet. Add the first person in your susu circle above.</p>
             ) : (
@@ -1185,53 +1341,69 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Contributed</th>
                     <th style={styles.th}>Received</th>
                     <th style={styles.th}>EF Balance</th>
-                    <th style={styles.th}>Recorded By</th>
+                    <th style={styles.th}>Status</th>
+                    <th style={styles.th}>Prepaid</th>
+                    {!isViewOnly && <th style={styles.th}>Recorded By</th>}
                     {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {perMember.map((m) => (
-                    <tr key={m.id}>
-                      <td style={styles.td} data-label="Member">
-                        {m.name}
-                        {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
-                      </td>
-                      <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
-                      <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
-                      <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
-                      <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
-                      <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
-                      {!isViewOnly && (
-                        <td style={styles.td}>
-                          <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
+                  {perMember.map((m) => {
+                    const statusColor = m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828');
+                    // Mask name if view-only
+                    const displayName = isViewOnly ? maskName(m.name) : m.name;
+                    return (
+                      <tr key={m.id}>
+                        <td style={styles.td} data-label="Member">
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: statusColor, flexShrink: 0 }}></span>
+                            {displayName}
+                            {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
+                          </span>
                         </td>
-                      )}
-                    </tr>
-                  ))}
+                        <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
+                        <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
+                        <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
+                        <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
+                        <td style={styles.td} data-label="Status">
+                          <span style={{ color: statusColor, fontWeight: 600 }}>{m.statusLabel}</span>
+                        </td>
+                        <td style={styles.td} data-label="Prepaid">
+                          {m.prepaidCount > 0 ? `${m.prepaidCount} month${m.prepaidCount > 1 ? 's' : ''}` : '—'}
+                        </td>
+                        {!isViewOnly && (
+                          <>
+                            <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
+                            <td style={styles.td}>
+                              <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
           </section>
         )}
 
-        {/* ===== CONTRIBUTIONS ===== */}
-        {tab === "contributions" && (
+        {/* Other tabs are only rendered if not view-only, but they won't be shown due to nav filtering */}
+        {!isViewOnly && tab === "contributions" && (
           <section>
-            {!isViewOnly && (
-              <div style={styles.formGrid}>
-                <select style={styles.input} value={cMember} onChange={(e) => setCMember(e.target.value)}>
-                  <option value="">Select member</option>
-                  {data.members.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name} ({m.type === 'child' ? '$25' : '$50'})</option>
-                  ))}
-                </select>
-                <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
-                {cMember && (
-                  <input style={styles.input} type="number" value={getContributionAmount(data.members.find(m => m.id === cMember)?.type || 'adult')} readOnly disabled placeholder="Amount" />
-                )}
-                <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
-              </div>
-            )}
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={cMember} onChange={(e) => setCMember(e.target.value)}>
+                <option value="">Select member</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name} ({m.type === 'child' ? '$25' : '$50'})</option>
+                ))}
+              </select>
+              <input style={styles.input} type="month" value={cMonth} onChange={(e) => setCMonth(e.target.value)} />
+              {cMember && (
+                <input style={styles.input} type="number" value={getContributionAmount(data.members.find(m => m.id === cMember)?.type || 'adult')} readOnly disabled placeholder="Amount" />
+              )}
+              <button style={styles.btnPrimary} type="button" onClick={addContribution}>Record contribution</button>
+            </div>
             {cMember && data.members.find(m => m.id === cMember) && (
               <p style={styles.splitPreview}>
                 {data.members.find(m => m.id === cMember).type === 'child'
@@ -1253,7 +1425,7 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>To pot</th>
                     <th style={styles.th}>To fund</th>
                     <th style={styles.th}>Recorded By</th>
-                    {!isViewOnly && <th style={styles.th}></th>}
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1266,11 +1438,9 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="To pot">{fmt(c.potShare || 0)}</td>
                       <td style={styles.td} data-label="To fund">{fmt(c.efShare || 0)}</td>
                       <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
-                      {!isViewOnly && (
-                        <td style={styles.td}>
-                          <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
-                        </td>
-                      )}
+                      <td style={styles.td}>
+                        <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1279,22 +1449,19 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* ===== PAYOUTS ===== */}
-        {tab === "payouts" && (
+        {!isViewOnly && tab === "payouts" && (
           <section>
-            {!isViewOnly && (
-              <div style={styles.formGrid}>
-                <select style={styles.input} value={pMember} onChange={(e) => setPMember(e.target.value)}>
-                  <option value="">Select member</option>
-                  {data.members.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-                <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
-                <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
-                <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
-              </div>
-            )}
+            <div style={styles.formGrid}>
+              <select style={styles.input} value={pMember} onChange={(e) => setPMember(e.target.value)}>
+                <option value="">Select member</option>
+                {data.members.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
+              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
+              <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
+            </div>
             <p style={styles.hint}>Pot balance available: {fmt(totals.potBalance)}</p>
             {data.payouts.length === 0 ? (
               <p style={styles.empty}>No payouts recorded yet.</p>
@@ -1306,7 +1473,7 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Member</th>
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
-                    {!isViewOnly && <th style={styles.th}></th>}
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1316,11 +1483,9 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="Member">{memberById[p.memberId]?.name || "Removed member"}</td>
                       <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
-                      {!isViewOnly && (
-                        <td style={styles.td}>
-                          <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
-                        </td>
-                      )}
+                      <td style={styles.td}>
+                        <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1329,67 +1494,64 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* ===== EMERGENCY FUND ===== */}
-        {tab === "fund" && (
+        {!isViewOnly && tab === "fund" && (
           <section>
             <div style={styles.fundBalanceCard}>
               <p style={styles.statLabelAccent}>Emergency fund balance</p>
               <p style={styles.statValueAccent}>{fmt(totals.efBalance)}</p>
             </div>
 
-            {!isViewOnly && (
-              <>
-                <h4 style={{ margin: "16px 0 8px" }}>Record Withdrawal</h4>
-                <div style={styles.formGrid}>
-                  <select style={styles.input} value={eMember} onChange={(e) => setEMember(e.target.value)}>
-                    <option value="">Select member</option>
-                    {data.members.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
-                    ))}
-                  </select>
-                  <input style={styles.input} placeholder="Reason (e.g. medical, funeral)" value={eReason} onChange={(e) => setEReason(e.target.value)} />
-                  <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
-                  <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
-                </div>
+            <>
+              <h4 style={{ margin: "16px 0 8px" }}>Record Withdrawal</h4>
+              <div style={styles.formGrid}>
+                <select style={styles.input} value={eMember} onChange={(e) => setEMember(e.target.value)}>
+                  <option value="">Select member</option>
+                  {data.members.map((m) => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                <input style={styles.input} placeholder="Reason (e.g. medical, funeral)" value={eReason} onChange={(e) => setEReason(e.target.value)} />
+                <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={eAmount} onChange={(e) => setEAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addWithdrawal(); }} />
+                <button style={styles.btnPrimary} type="button" onClick={addWithdrawal}>Record withdrawal</button>
+              </div>
 
-                <h4 style={{ margin: "16px 0 8px" }}>Transfer Funds</h4>
-                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
-                  <select style={styles.input} value={transferDirection} onChange={(e) => setTransferDirection(e.target.value)}>
-                    <option value="ef-to-pot">Emergency Fund → Pot</option>
-                    <option value="pot-to-ef">Pot → Emergency Fund</option>
-                  </select>
-                  <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} />
-                  <input style={styles.input} placeholder="Justification (required)" value={transferReason} onChange={(e) => setTransferReason(e.target.value)} />
-                  <button style={styles.btnPrimary} type="button" onClick={() => {
-                    if (!parseFloat(transferAmount) || parseFloat(transferAmount) <= 0) {
-                      setNotice({ type: "error", text: "Please enter a valid amount." });
-                      return;
-                    }
-                    if (!transferReason.trim()) {
-                      setNotice({ type: "error", text: "Please enter a justification." });
-                      return;
-                    }
-                    setShowTransferModal(true);
-                  }}>Execute Transfer</button>
-                </div>
+              <h4 style={{ margin: "16px 0 8px" }}>Transfer Funds</h4>
+              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
+                <select style={styles.input} value={transferDirection} onChange={(e) => setTransferDirection(e.target.value)}>
+                  <option value="ef-to-pot">Emergency Fund → Pot</option>
+                  <option value="pot-to-ef">Pot → Emergency Fund</option>
+                </select>
+                <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} />
+                <input style={styles.input} placeholder="Justification (required)" value={transferReason} onChange={(e) => setTransferReason(e.target.value)} />
+                <button style={styles.btnPrimary} type="button" onClick={() => {
+                  if (!parseFloat(transferAmount) || parseFloat(transferAmount) <= 0) {
+                    setNotice({ type: "error", text: "Please enter a valid amount." });
+                    return;
+                  }
+                  if (!transferReason.trim()) {
+                    setNotice({ type: "error", text: "Please enter a justification." });
+                    return;
+                  }
+                  setShowTransferModal(true);
+                }}>Execute Transfer</button>
+              </div>
 
-                {showTransferModal && (
-                  <div style={styles.modalOverlay}>
-                    <div style={styles.modal}>
-                      <h3 style={{ marginTop: 0 }}>Confirm Transfer</h3>
-                      <p><strong>Direction:</strong> {transferDirection === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'}</p>
-                      <p><strong>Amount:</strong> {fmt(parseFloat(transferAmount) || 0)}</p>
-                      <p><strong>Justification:</strong> {transferReason}</p>
-                      <p style={{ color: "#9C4A2E", fontSize: 13 }}>⚠️ This action will permanently move funds between accounts.</p>
-                      <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                        <button style={styles.btnPrimary} onClick={executeTransfer}>Confirm Transfer</button>
-                        <button style={styles.btnGhostSmall} onClick={() => { setShowTransferModal(false); }}>Cancel</button>
-                      </div>
+              {showTransferModal && (
+                <div style={styles.modalOverlay}>
+                  <div style={styles.modal}>
+                    <h3 style={{ marginTop: 0 }}>Confirm Transfer</h3>
+                    <p><strong>Direction:</strong> {transferDirection === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'}</p>
+                    <p><strong>Amount:</strong> {fmt(parseFloat(transferAmount) || 0)}</p>
+                    <p><strong>Justification:</strong> {transferReason}</p>
+                    <p style={{ color: "#9C4A2E", fontSize: 13 }}>⚠️ This action will permanently move funds between accounts.</p>
+                    <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                      <button style={styles.btnPrimary} onClick={executeTransfer}>Confirm Transfer</button>
+                      <button style={styles.btnGhostSmall} onClick={() => { setShowTransferModal(false); }}>Cancel</button>
                     </div>
                   </div>
-                )}
-              </>
-            )}
+                </div>
+              )}
+            </>
 
             {data.efWithdrawals.length === 0 && (data.transfers || []).length === 0 ? (
               <p style={styles.empty}>No withdrawals or transfers recorded yet.</p>
@@ -1406,7 +1568,7 @@ The user can then re-enable password protection with a new password.
                       <th style={styles.th}>Repaid</th>
                       <th style={styles.th}>Remaining</th>
                       <th style={styles.th}>Recorded By</th>
-                      {!isViewOnly && <th style={styles.th}>Actions</th>}
+                      <th style={styles.th}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1415,28 +1577,26 @@ The user can then re-enable password protection with a new password.
                       const remaining = w.amount - repaid;
                       return (
                         <tr key={w.id}>
-                          <td style={styles.td} data-label="Date">{new Date(w.date).toLocaleDateString()}</td>
+                          <td style={styles.td} data-label="Date">{formatEasternDateShort(w.date)}</td>
                           <td style={styles.td} data-label="Member">{w.memberId ? (memberById[w.memberId]?.name || "Removed member") : "General fund"}</td>
                           <td style={styles.td} data-label="Reason">{w.reason}</td>
                           <td style={styles.td} data-label="Amount">{fmt(w.amount)}</td>
                           <td style={styles.td} data-label="Repaid">{fmt(repaid)}</td>
                           <td style={styles.td} data-label="Remaining">{fmt(remaining)}</td>
                           <td style={styles.td} data-label="Recorded By">{w.recordedBy ? `Recorded By ${w.recordedBy}` : "—"}</td>
-                          {!isViewOnly && (
-                            <td style={styles.td} data-label="Actions">
-                              {remaining > 0.01 && (
-                                <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
-                              )}
-                              <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
-                            </td>
-                          )}
+                          <td style={styles.td} data-label="Actions">
+                            {remaining > 0.01 && (
+                              <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
+                            )}
+                            <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
+                          </td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
 
-                {repayLoanId && !isViewOnly && (
+                {repayLoanId && (
                   <div style={{ ...styles.formGrid, marginTop: 12, background: "#f5f0e6", padding: 12, borderRadius: 8 }}>
                     <span style={{ fontWeight: 600, alignSelf: "center" }}>Repay loan for {memberById[data.efWithdrawals.find(w => w.id === repayLoanId)?.memberId]?.name || 'member'}</span>
                     <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={repayAmount} onChange={(e) => setRepayAmount(e.target.value)} />
@@ -1456,22 +1616,20 @@ The user can then re-enable password protection with a new password.
                           <th style={styles.th}>Amount</th>
                           <th style={styles.th}>Justification</th>
                           <th style={styles.th}>Recorded By</th>
-                          {!isViewOnly && <th style={styles.th}></th>}
+                          <th style={styles.th}></th>
                         </tr>
                       </thead>
                       <tbody>
                         {[...(data.transfers || [])].sort((a, b) => (a.date < b.date ? 1 : -1)).map((t) => (
                           <tr key={t.id}>
-                            <td style={styles.td} data-label="Date">{new Date(t.date).toLocaleDateString()}</td>
+                            <td style={styles.td} data-label="Date">{formatEasternDateShort(t.date)}</td>
                             <td style={styles.td} data-label="Direction">{t.direction === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'}</td>
                             <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
                             <td style={styles.td} data-label="Justification">{t.reason}</td>
                             <td style={styles.td} data-label="Recorded By">{t.recordedBy || '—'}</td>
-                            {!isViewOnly && (
-                              <td style={styles.td}>
-                                <button style={styles.btnGhostSmall} onClick={() => removeTransfer(t.id)}>Remove</button>
-                              </td>
-                            )}
+                            <td style={styles.td}>
+                              <button style={styles.btnGhostSmall} onClick={() => removeTransfer(t.id)}>Remove</button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1483,8 +1641,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* ===== LOANS ===== */}
-        {tab === "loans" && (
+        {!isViewOnly && tab === "loans" && (
           <section>
             <h3 style={{ marginBottom: 12 }}>Outstanding Emergency Fund Loans</h3>
             {loansOutstanding.length === 0 ? (
@@ -1505,7 +1662,7 @@ The user can then re-enable password protection with a new password.
                 <tbody>
                   {loansOutstanding.map((w) => (
                     <tr key={w.id}>
-                      <td style={styles.td} data-label="Date">{new Date(w.date).toLocaleDateString()}</td>
+                      <td style={styles.td} data-label="Date">{formatEasternDateShort(w.date)}</td>
                       <td style={styles.td} data-label="Member">{w.memberId ? (memberById[w.memberId]?.name || "Removed member") : "General fund"}</td>
                       <td style={styles.td} data-label="Reason">{w.reason}</td>
                       <td style={styles.td} data-label="Total">{fmt(w.amount)}</td>
@@ -1520,8 +1677,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* ===== TRANSACTIONS ===== */}
-        {tab === "transactions" && (
+        {!isViewOnly && tab === "transactions" && (
           <section>
             <p style={styles.hint}>Full audit log of every transaction. Items marked with "Audit" cannot be deleted.</p>
             <div style={styles.formGrid}>
@@ -1556,13 +1712,13 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
                     <th style={styles.th}>Details</th>
-                    {!isViewOnly && <th style={styles.th}></th>}
+                    <th style={styles.th}></th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredTransactions.map((t) => (
                     <tr key={t.id}>
-                      <td style={styles.td} data-label="Date & time">{new Date(t.date).toLocaleString()}</td>
+                      <td style={styles.td} data-label="Date & time">{formatEasternDate(t.date)}</td>
                       <td style={styles.td} data-label="Type">
                         {t.typeLabel}
                         {t.type === "removed" && <span style={styles.nextTag}>Audit</span>}
@@ -1571,14 +1727,12 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{t.recordedBy}</td>
                       <td style={styles.td} data-label="Details">{t.detail}</td>
-                      {!isViewOnly && (
-                        <td style={styles.td} data-label="Actions">
-                          {t.canRemove && (
-                            <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
-                          )}
-                          {!t.canRemove && <span style={{ fontSize: 11, color: "#8A8471" }}>Audit</span>}
-                        </td>
-                      )}
+                      <td style={styles.td} data-label="Actions">
+                        {t.canRemove && (
+                          <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
+                        )}
+                        {!t.canRemove && <span style={{ fontSize: 11, color: "#8A8471" }}>Audit</span>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1587,8 +1741,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* ===== SETTINGS ===== */}
-        {tab === "settings" && (
+        {!isViewOnly && tab === "settings" && (
           <section>
             <h3 style={{ marginBottom: 12 }}>App Settings</h3>
 
@@ -1827,7 +1980,7 @@ The user can then re-enable password protection with a new password.
                     <strong style={styles.chatSender}>{msg.sender}</strong>
                     <span style={styles.chatText}>{msg.message}</span>
                     <span style={styles.chatTime}>
-                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {formatEasternDate(msg.created_at)}
                     </span>
                   </div>
                 ))}
