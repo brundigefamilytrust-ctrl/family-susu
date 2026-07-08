@@ -77,12 +77,15 @@ export default function SusuTracker() {
   const [passwordInput, setPasswordInput] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  // Store password session flag in sessionStorage so it persists across page reloads in same session
   const [sessionAuthorized, setSessionAuthorized] = useState(() => {
-    // Check if we already have a valid session
     return sessionStorage.getItem('susu_password_authorized') === 'true';
   });
-  // For settings: show password hidden by default
+  
+  // ----- Settings password lock -----
+  const [settingsPasswordInput, setSettingsPasswordInput] = useState("");
+  const [showSettingsPasswordModal, setShowSettingsPasswordModal] = useState(false);
+  const [settingsAccessGranted, setSettingsAccessGranted] = useState(false);
+  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [showPasswordText, setShowPasswordText] = useState(false);
 
   // ----- View-only mode -----
@@ -191,6 +194,11 @@ export default function SusuTracker() {
     return input === (data.settings?.password || '');
   }
 
+  // For settings tab access
+  function checkSettingsPassword(input) {
+    return input === (data.settings?.password || '');
+  }
+
   function wrapWithPasswordCheck(action, actionName) {
     if (isViewOnly) {
       setNotice({ type: "error", text: "View-only mode — you cannot make changes." });
@@ -201,7 +209,6 @@ export default function SusuTracker() {
       setNotice({ type: "warning", text: "Enter your name at the top first." });
       return;
     }
-    // If already authorized this session, skip password
     if (sessionAuthorized) {
       action();
       return;
@@ -223,7 +230,6 @@ export default function SusuTracker() {
       setPasswordInput("");
       return;
     }
-    // Password correct — authorize session
     setSessionAuthorized(true);
     sessionStorage.setItem('susu_password_authorized', 'true');
     setShowPasswordModal(false);
@@ -238,6 +244,41 @@ export default function SusuTracker() {
     setShowPasswordModal(false);
     setPendingAction(null);
     setPasswordInput("");
+  }
+
+  // Settings password unlock
+  function tryUnlockSettings() {
+    if (!requiresPasswordCheck()) {
+      setSettingsAccessGranted(true);
+      setShowSettingsPasswordModal(false);
+      return;
+    }
+    if (checkSettingsPassword(settingsPasswordInput)) {
+      setSettingsAccessGranted(true);
+      setShowSettingsPasswordModal(false);
+      setSettingsPasswordInput("");
+      setNotice({ type: "warning", text: "Settings unlocked." });
+    } else {
+      setNotice({ type: "error", text: "Incorrect password." });
+      setSettingsPasswordInput("");
+    }
+  }
+
+  function handleSettingsTabClick() {
+    if (isViewOnly) {
+      setNotice({ type: "error", text: "Settings are not available in view-only mode." });
+      return;
+    }
+    if (!requiresPasswordCheck()) {
+      setTab("settings");
+      return;
+    }
+    if (settingsAccessGranted) {
+      setTab("settings");
+      return;
+    }
+    setShowSettingsPasswordModal(true);
+    setSettingsPasswordInput("");
   }
 
   // ============================================
@@ -333,12 +374,11 @@ export default function SusuTracker() {
   }, [data.efWithdrawals, data.efRepayments]);
 
   // ============================================
-  // ALL TRANSACTIONS (with fixed labels for member_added/removed)
+  // ALL TRANSACTIONS
   // ============================================
   const allTransactions = useMemo(() => {
     const rows = [];
 
-    // Contributions
     data.contributions.forEach((c) => {
       rows.push({
         id: `c-${c.id}`,
@@ -354,7 +394,6 @@ export default function SusuTracker() {
       });
     });
 
-    // Payouts
     data.payouts.forEach((p) => {
       rows.push({
         id: `p-${p.id}`,
@@ -370,7 +409,6 @@ export default function SusuTracker() {
       });
     });
 
-    // EF Withdrawals
     data.efWithdrawals.forEach((w) => {
       const repaid = data.efRepayments.filter(r => r.loanId === w.id).reduce((s, r) => s + r.amount, 0);
       rows.push({
@@ -387,7 +425,6 @@ export default function SusuTracker() {
       });
     });
 
-    // EF Repayments
     (data.efRepayments || []).forEach((r) => {
       rows.push({
         id: `r-${r.id}`,
@@ -403,7 +440,6 @@ export default function SusuTracker() {
       });
     });
 
-    // Transfers
     (data.transfers || []).forEach((t) => {
       rows.push({
         id: `t-${t.id}`,
@@ -419,7 +455,6 @@ export default function SusuTracker() {
       });
     });
 
-    // Removed entries (audit log) — handle member_added and member_removed separately
     (data.removedLog || []).forEach((r) => {
       const e = r.removedEntry || {};
       let typeLabel = '';
@@ -438,7 +473,6 @@ export default function SusuTracker() {
         detailText = `Removed from group`;
         amountDisplay = 0;
       } else {
-        // Other kinds (contribution, payout, withdrawal, etc.)
         typeLabel = `Removed ${r.kind || 'entry'}`;
         memberNameDisplay = e.memberId ? (memberById[e.memberId]?.name || 'Removed member') : (e.memberName || '—');
         detailText = `Originally recorded ${e.date ? new Date(e.date).toLocaleString() : '—'} by ${e.recordedBy || '—'}`;
@@ -487,7 +521,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Set next payout');
   }
 
-  // ----- Members -----
   function addMember() {
     const name = memberName.trim();
     if (!name) return;
@@ -498,7 +531,6 @@ export default function SusuTracker() {
       };
       persist(next);
       setMemberName("");
-      // Log member addition with kind 'member_added'
       const logEntry = {
         id: uid(),
         kind: 'member_added',
@@ -531,7 +563,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove member');
   }
 
-  // ----- Contributions -----
   function addContribution() {
     const member = data.members.find(m => m.id === cMember);
     if (!member) return;
@@ -576,7 +607,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove contribution');
   }
 
-  // ----- Payouts -----
   function addPayout() {
     const amount = parseFloat(pAmount);
     if (!pMember || !amount || amount <= 0) return;
@@ -610,7 +640,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove payout');
   }
 
-  // ----- EF Withdrawals -----
   function addWithdrawal() {
     const amount = parseFloat(eAmount);
     if (!amount || amount <= 0) return;
@@ -655,7 +684,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove EF withdrawal');
   }
 
-  // ----- Repayments -----
   function addRepayment(loanId, memberId, amount) {
     if (!amount || amount <= 0) return;
     const action = () => {
@@ -704,7 +732,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove repayment');
   }
 
-  // ----- Transfers -----
   function executeTransfer() {
     const amount = parseFloat(transferAmount);
     if (!amount || amount <= 0) {
@@ -767,7 +794,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Remove transfer');
   }
 
-  // ----- Settings -----
   function updatePasswordSetting() {
     const action = () => {
       const settings = {
@@ -776,9 +802,11 @@ export default function SusuTracker() {
       };
       persist({ ...data, settings });
       setNotice({ type: "warning", text: passwordToggle ? `Password protection enabled.` : "Password protection disabled." });
-      // Reset session auth when password changes
       sessionStorage.removeItem('susu_password_authorized');
       setSessionAuthorized(false);
+      if (!passwordToggle) {
+        setSettingsAccessGranted(false);
+      }
     };
     wrapWithPasswordCheck(action, 'Update password settings');
   }
@@ -796,6 +824,34 @@ export default function SusuTracker() {
     else if (type === 'transfer') removeTransfer(entry.originalId);
     else setNotice({ type: "error", text: "Cannot remove this type of entry." });
   }
+
+  // ============================================
+  // FORGOT PASSWORD MESSAGE
+  // ============================================
+  const forgotPasswordMessage = `--- FORWARD THIS MESSAGE TO THE COMPLIANCE OFFICER & TECHNOLOGY OFFICER ---
+
+Subject: Family Susu App — Password Reset Required
+
+Dear Compliance Officer & Technology Officer,
+
+A password reset has been requested for the Family Susu App.
+
+To reset the password, please follow these steps:
+
+1. Log in to Supabase at: https://supabase.com/dashboard
+2. Select the "family-susu" project
+3. Click on "Table Editor" in the left sidebar
+4. Click on the "app_state" table
+5. Find the row with key = "susu_data"
+6. Click the pencil icon (Edit) on that row
+7. In the "value" field, locate the "settings" object
+8. Change "requirePassword" from true to false
+9. Click "Save"
+10. The password protection is now disabled
+
+The user can then re-enable password protection with a new password.
+
+--- END OF MESSAGE ---`;
 
   // ============================================
   // RENDER
@@ -956,7 +1012,13 @@ export default function SusuTracker() {
         ].map(([key, label]) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => {
+              if (key === "settings") {
+                handleSettingsTabClick();
+              } else {
+                setTab(key);
+              }
+            }}
             style={tab === key ? styles.tabActive : styles.tab}
           >
             {label}
@@ -1410,7 +1472,7 @@ export default function SusuTracker() {
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
                     <label style={{ fontWeight: 600 }}>Password Protection</label>
                     <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
-                      When enabled, all write actions (add, remove, transfer, repay) will require a password. 
+                      When enabled, all write actions (add, remove, transfer, repay) will require a password.
                       You only need to enter it once per browser session.
                     </p>
                   </div>
@@ -1428,6 +1490,7 @@ export default function SusuTracker() {
                             setNotice({ type: "warning", text: "Password protection disabled." });
                             sessionStorage.removeItem('susu_password_authorized');
                             setSessionAuthorized(false);
+                            setSettingsAccessGranted(false);
                           }
                         }}
                       />
@@ -1454,17 +1517,14 @@ export default function SusuTracker() {
                       persist({ ...data, settings });
                       setPasswordToggle(true);
                       setNotice({ type: "warning", text: `Password protection enabled.` });
-                      // Show password briefly
-                      setShowPasswordText(true);
-                      setTimeout(() => setShowPasswordText(false), 5000);
                     }}>Set Password</button>
                     {data.settings?.password && (
                       <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
-                        Current password: 
+                        Current password:
                         <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
                           {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
                         </span>
-                        <button 
+                        <button
                           style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
                           onClick={() => setShowPasswordText(!showPasswordText)}
                         >
@@ -1536,7 +1596,64 @@ export default function SusuTracker() {
         )}
       </main>
 
-      {/* ===== PASSWORD MODAL ===== */}
+      {/* ===== SETTINGS PASSWORD MODAL ===== */}
+      {showSettingsPasswordModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
+            <h3 style={{ marginTop: 0 }}>🔒 Settings Locked</h3>
+            <p>Enter the password to access Settings.</p>
+            <input
+              style={{ ...styles.input, width: "100%", marginTop: 8 }}
+              type="password"
+              placeholder="Enter password..."
+              value={settingsPasswordInput}
+              onChange={(e) => setSettingsPasswordInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") tryUnlockSettings(); }}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <button style={styles.btnPrimary} onClick={tryUnlockSettings}>Unlock Settings</button>
+              <button style={styles.btnGhostSmall} onClick={() => { setShowSettingsPasswordModal(false); setSettingsPasswordInput(""); }}>Cancel</button>
+              <button style={{ ...styles.btnGhostSmall, color: "#9C4A2E" }} onClick={() => setShowForgotPasswordModal(true)}>Forgot Password?</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== FORGOT PASSWORD MODAL ===== */}
+      {showForgotPasswordModal && (
+        <div style={styles.modalOverlay}>
+          <div style={{ ...styles.modal, maxWidth: "600px" }}>
+            <h3 style={{ marginTop: 0 }}>🔑 Forgot Password?</h3>
+            <p style={{ fontSize: 14, color: "#5F5E5A", marginBottom: 12 }}>
+              Forward this message to the <strong>Compliance Officer &amp; Technology Officer</strong> to reset via Supabase:
+            </p>
+            <div style={{
+              background: "#f5f0e6",
+              padding: "14px",
+              borderRadius: 8,
+              fontSize: 13,
+              fontFamily: "monospace",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              maxHeight: "300px",
+              overflow: "auto",
+              border: "1px solid #E4DBC4"
+            }}>
+              {forgotPasswordMessage}
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <button style={styles.btnPrimary} onClick={() => {
+                navigator.clipboard.writeText(forgotPasswordMessage);
+                setNotice({ type: "warning", text: "Message copied to clipboard!" });
+              }}>📋 Copy Message</button>
+              <button style={styles.btnGhostSmall} onClick={() => { setShowForgotPasswordModal(false); }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== ACTION PASSWORD MODAL ===== */}
       {showPasswordModal && (
         <div style={styles.modalOverlay}>
           <div style={styles.modal}>
@@ -1552,9 +1669,10 @@ export default function SusuTracker() {
               onKeyDown={(e) => { if (e.key === "Enter") executePendingAction(); }}
               autoFocus
             />
-            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
               <button style={styles.btnPrimary} onClick={executePendingAction}>Submit</button>
               <button style={styles.btnGhostSmall} onClick={cancelPasswordModal}>Cancel</button>
+              <button style={{ ...styles.btnGhostSmall, color: "#9C4A2E" }} onClick={() => { setShowPasswordModal(false); setShowForgotPasswordModal(true); }}>Forgot Password?</button>
             </div>
           </div>
         </div>
