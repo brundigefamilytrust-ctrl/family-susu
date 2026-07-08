@@ -1,5 +1,5 @@
 /* eslint-disable */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
@@ -55,6 +55,7 @@ const emptyData = {
     requirePassword: false,
     password: ''
   },
+  version: 0,
   updatedAt: null
 };
 
@@ -72,6 +73,7 @@ export default function SusuTracker() {
   const [editingName, setEditingName] = useState(true);
   const nameInputRef = React.useRef(null);
   const lastKnownUpdatedAt = React.useRef(null);
+  const lastKnownVersion = React.useRef(0);
 
   // ----- Password state -----
   const [passwordInput, setPasswordInput] = useState("");
@@ -93,6 +95,14 @@ export default function SusuTracker() {
     const params = new URLSearchParams(window.location.search);
     return params.get('mode') === 'view';
   }, []);
+
+  // ----- Chat state -----
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatMessage, setChatMessage] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const chatContainerRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const chatSubscriptionRef = useRef(null);
 
   // ----- Form states -----
   const [memberName, setMemberName] = useState("");
@@ -127,6 +137,86 @@ export default function SusuTracker() {
   const [passwordToggle, setPasswordToggle] = useState(false);
 
   // ============================================
+  // CHAT LOGIC
+  // ============================================
+  useEffect(() => {
+    if (!isViewOnly) {
+      loadChatMessages();
+      subscribeToChat();
+    }
+    return () => {
+      if (chatSubscriptionRef.current) {
+        chatSubscriptionRef.current.unsubscribe();
+      }
+    };
+  }, [isViewOnly]);
+
+  async function loadChatMessages() {
+    try {
+      const { data: messages, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      if (messages) {
+        setChatMessages(messages.reverse());
+        setTimeout(scrollChatToBottom, 100);
+      }
+    } catch (e) {
+      console.log('Chat load error:', e);
+    }
+  }
+
+  function subscribeToChat() {
+    if (chatSubscriptionRef.current) {
+      chatSubscriptionRef.current.unsubscribe();
+    }
+    chatSubscriptionRef.current = supabase
+      .channel('chat_messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages' }, (payload) => {
+        const newMsg = payload.new;
+        setChatMessages(prev => [...prev, newMsg]);
+        setTimeout(scrollChatToBottom, 100);
+      })
+      .subscribe();
+  }
+
+  async function sendChatMessage() {
+    const msg = chatMessage.trim();
+    if (!msg) return;
+    if (!recorderName) {
+      setNotice({ type: "warning", text: "Please set your name at the top first." });
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('chat_messages')
+        .insert({ sender: recorderName, message: msg });
+      if (error) throw error;
+      setChatMessage("");
+      if (chatInputRef.current) chatInputRef.current.focus();
+    } catch (e) {
+      console.log('Chat send error:', e);
+      setNotice({ type: "error", text: "Could not send message." });
+    }
+  }
+
+  function scrollChatToBottom() {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }
+
+  function toggleChat() {
+    setChatOpen(!chatOpen);
+    if (!chatOpen) {
+      setTimeout(scrollChatToBottom, 300);
+      setTimeout(() => chatInputRef.current?.focus(), 400);
+    }
+  }
+
+  // ============================================
   // SUPABASE SYNC
   // ============================================
   useEffect(() => {
@@ -152,11 +242,15 @@ export default function SusuTracker() {
         if (!parsed.transfers) {
           parsed.transfers = [];
         }
+        if (parsed.version === undefined) {
+          parsed.version = 0;
+        }
         const remoteUpdatedAt = parsed.updatedAt || null;
         const isNewer = !lastKnownUpdatedAt.current || !remoteUpdatedAt || remoteUpdatedAt > lastKnownUpdatedAt.current;
         if (isNewer) {
           setData({ ...emptyData, ...parsed });
           lastKnownUpdatedAt.current = remoteUpdatedAt;
+          lastKnownVersion.current = parsed.version || 0;
           setPasswordToggle(parsed.settings?.requirePassword || false);
         }
       }
@@ -169,18 +263,54 @@ export default function SusuTracker() {
   }
 
   async function persist(nextRaw) {
-    const next = { ...nextRaw, updatedAt: new Date().toISOString() };
-    lastKnownUpdatedAt.current = next.updatedAt;
-    setData(next);
+    // Check for conflicts
+    const currentVersion = lastKnownVersion.current;
+    const nextVersion = (nextRaw.version || 0) + 1;
+    const next = { ...nextRaw, version: nextVersion, updatedAt: new Date().toISOString() };
+    
+    // Try to save with version check via Supabase
     try {
+      // First, get the current data to check version
+      const { data: current, error: fetchError } = await supabase
+        .from('app_state')
+        .select('value')
+        .eq('key', 'susu_data')
+        .single();
+      
+      if (fetchError) throw fetchError;
+      
+      if (current && current.value) {
+        const currentParsed = current.value;
+        const dbVersion = currentParsed.version || 0;
+        
+        if (dbVersion !== currentVersion) {
+          // Conflict detected
+          setNotice({ 
+            type: "error", 
+            text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.` 
+          });
+          // Reload data
+          await loadShared();
+          return;
+        }
+      }
+      
+      // No conflict — proceed with save
       const { error } = await supabase
         .from('app_state')
         .upsert({ key: 'susu_data', value: next }, { onConflict: 'key' });
+      
       if (error) throw error;
+      
+      lastKnownUpdatedAt.current = next.updatedAt;
+      lastKnownVersion.current = nextVersion;
+      setData(next);
+      setSyncedAt(new Date());
+      
     } catch (e) {
-      setNotice({ type: "error", text: "Could not save. Your last change may not persist." });
+      console.log('Save error:', e);
+      setNotice({ type: "error", text: "Could not save. Please try again." });
     }
-    setSyncedAt(new Date());
   }
 
   // ============================================
@@ -194,7 +324,6 @@ export default function SusuTracker() {
     return input === (data.settings?.password || '');
   }
 
-  // For settings tab access
   function checkSettingsPassword(input) {
     return input === (data.settings?.password || '');
   }
@@ -246,7 +375,6 @@ export default function SusuTracker() {
     setPasswordInput("");
   }
 
-  // Settings password unlock
   function tryUnlockSettings() {
     if (!requiresPasswordCheck()) {
       setSettingsAccessGranted(true);
@@ -1677,6 +1805,48 @@ The user can then re-enable password protection with a new password.
           </div>
         </div>
       )}
+
+      {/* ===== CHAT PANEL ===== */}
+      {!isViewOnly && (
+        <div style={styles.chatWrapper}>
+          <button style={styles.chatToggle} onClick={toggleChat}>
+            💬 {chatOpen ? '✕' : 'Chat'}
+          </button>
+          {chatOpen && (
+            <div style={styles.chatWindow}>
+              <div style={styles.chatHeader}>
+                <span style={{ fontWeight: 600 }}>📨 Treasurer Chat</span>
+                <span style={{ fontSize: 11, color: "#7A7460" }}>Real-time</span>
+              </div>
+              <div ref={chatContainerRef} style={styles.chatMessages}>
+                {chatMessages.length === 0 && (
+                  <p style={{ color: "#8A8471", textAlign: "center", padding: 20 }}>No messages yet. Start the conversation!</p>
+                )}
+                {chatMessages.map((msg) => (
+                  <div key={msg.id} style={styles.chatBubble}>
+                    <strong style={styles.chatSender}>{msg.sender}</strong>
+                    <span style={styles.chatText}>{msg.message}</span>
+                    <span style={styles.chatTime}>
+                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div style={styles.chatInputRow}>
+                <input
+                  ref={chatInputRef}
+                  style={{ ...styles.input, flex: 1 }}
+                  placeholder="Type a message..."
+                  value={chatMessage}
+                  onChange={(e) => setChatMessage(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendChatMessage(); }}
+                />
+                <button style={styles.btnPrimary} onClick={sendChatMessage}>Send</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1775,5 +1945,102 @@ const styles = {
     width: "90%",
     boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
     border: "1px solid #E4DBC4"
+  },
+  chatWrapper: {
+    position: "fixed",
+    bottom: 20,
+    right: 20,
+    zIndex: 998,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end"
+  },
+  chatToggle: {
+    background: "#1F5D3B",
+    color: "#FBF4E4",
+    border: "none",
+    borderRadius: 50,
+    width: 56,
+    height: 56,
+    fontSize: 22,
+    cursor: "pointer",
+    boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "background 0.2s"
+  },
+  chatWindow: {
+    background: "#FFFDF7",
+    border: "1px solid #E4DBC4",
+    borderRadius: 12,
+    width: 340,
+    maxWidth: "90vw",
+    height: 420,
+    display: "flex",
+    flexDirection: "column",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
+    marginBottom: 10,
+    overflow: "hidden",
+    animation: "slideUp 0.25s ease"
+  },
+  chatHeader: {
+    padding: "10px 14px",
+    background: "#F5F0E6",
+    borderBottom: "1px solid #E4DBC4",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexShrink: 0
+  },
+  chatMessages: {
+    flex: 1,
+    padding: "10px 12px",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    minHeight: 0
+  },
+  chatBubble: {
+    background: "#F5F0E6",
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 13,
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    wordBreak: "break-word"
+  },
+  chatSender: {
+    fontSize: 11,
+    color: "#1F5D3B",
+    fontWeight: 600
+  },
+  chatText: {
+    fontSize: 13,
+    color: "#2C2C2A"
+  },
+  chatTime: {
+    fontSize: 10,
+    color: "#8A8471",
+    alignSelf: "flex-end"
+  },
+  chatInputRow: {
+    padding: "8px 12px",
+    borderTop: "1px solid #E4DBC4",
+    display: "flex",
+    gap: 8,
+    flexShrink: 0
   }
 };
+
+// Inject keyframe animation for chat
+const styleSheet = document.createElement("style");
+styleSheet.textContent = `
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+`;
+document.head.appendChild(styleSheet);
