@@ -162,6 +162,12 @@ export default function SusuTracker() {
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
   const [showPasswordText, setShowPasswordText] = useState(false);
 
+  // ----- Confirmation / Justification modal -----
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [confirmJustification, setConfirmJustification] = useState("");
+  const [confirmMessage, setConfirmMessage] = useState("");
+
   // ----- View-only mode -----
   const isViewOnly = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -476,6 +482,39 @@ export default function SusuTracker() {
   }
 
   // ============================================
+  // CONFIRMATION / JUSTIFICATION MODAL
+  // ============================================
+  function confirmRemove(actionFn, itemName, actionLabel) {
+    setConfirmMessage(`Are you sure you want to ${actionLabel} "${itemName}"?`);
+    setConfirmAction({ actionFn, actionLabel });
+    setConfirmJustification("");
+    setShowConfirmModal(true);
+  }
+
+  function executeConfirmedAction() {
+    if (!confirmJustification.trim()) {
+      setNotice({ type: "error", text: "Please provide a justification." });
+      return;
+    }
+    setShowConfirmModal(false);
+    // Wrap the action with password check, passing justification
+    const wrappedAction = () => {
+      // The action function should accept justification as an argument
+      if (confirmAction) {
+        confirmAction.actionFn(confirmJustification.trim());
+      }
+    };
+    wrapWithPasswordCheck(wrappedAction, confirmAction?.actionLabel || 'Remove item');
+  }
+
+  function cancelConfirmModal() {
+    setShowConfirmModal(false);
+    setConfirmAction(null);
+    setConfirmJustification("");
+    setConfirmMessage("");
+  }
+
+  // ============================================
   // HELPERS
   // ============================================
   const memberById = useMemo(() => {
@@ -519,7 +558,6 @@ export default function SusuTracker() {
   }, [data]);
 
   const perMember = useMemo(() => {
-    // Get today's day of month in Eastern time
     const now = new Date();
     const eastern = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', day: 'numeric' }).format(now);
     const todayDay = parseInt(eastern);
@@ -565,15 +603,12 @@ export default function SusuTracker() {
         status = 'green';
         statusLabel = 'Current';
       } else {
-        // Not paid this month
         const lastMonth = new Date();
         lastMonth.setMonth(lastMonth.getMonth() - 1);
         const lastMonthStr = lastMonth.getFullYear() + '-' + String(lastMonth.getMonth()+1).padStart(2, '0');
         const paidLastMonth = data.contributions.some(c => c.memberId === m.id && c.month === lastMonthStr);
         
-        // Late only if today > 5 and not paid this month and not paid last month
         if (todayDay > 5) {
-          // After 5th, if not paid this month
           if (paidLastMonth) {
             status = 'yellow';
             statusLabel = 'Not Current (Paid Last Month)';
@@ -582,13 +617,11 @@ export default function SusuTracker() {
             statusLabel = 'Late';
           }
         } else {
-          // Before or on the 5th, not considered late
           if (paidLastMonth) {
             status = 'yellow';
             statusLabel = 'Not Current (Paid Last Month)';
           } else {
-            // Even if they didn't pay last month, before 5th they are not late
-            status = 'yellow'; // or maybe orange? We'll keep yellow with a note
+            status = 'yellow';
             statusLabel = 'Pending (Due by 5th)';
           }
         }
@@ -640,7 +673,7 @@ export default function SusuTracker() {
   }, [data.efWithdrawals, data.efRepayments]);
 
   // ============================================
-  // ALL TRANSACTIONS
+  // ALL TRANSACTIONS (with justification)
   // ============================================
   const allTransactions = useMemo(() => {
     const rows = [];
@@ -656,7 +689,8 @@ export default function SusuTracker() {
         recordedBy: c.recordedBy || '—',
         detail: `${c.memberType === 'child' ? 'Child' : 'Adult'} · ${fmt(c.potShare || 0)} to pot, ${fmt(c.efShare || 0)} to fund · ${monthLabel(c.month)}`,
         originalId: c.id,
-        canRemove: true
+        canRemove: true,
+        justification: null
       });
     });
 
@@ -671,7 +705,8 @@ export default function SusuTracker() {
         recordedBy: p.recordedBy || '—',
         detail: `Payout · ${monthLabel(p.month)}`,
         originalId: p.id,
-        canRemove: true
+        canRemove: true,
+        justification: null
       });
     });
 
@@ -687,7 +722,8 @@ export default function SusuTracker() {
         recordedBy: w.recordedBy || '—',
         detail: `${w.reason || 'No reason'} · Repaid: ${fmt(repaid)} · Remaining: ${fmt(w.amount - repaid)}`,
         originalId: w.id,
-        canRemove: true
+        canRemove: true,
+        justification: null
       });
     });
 
@@ -702,7 +738,8 @@ export default function SusuTracker() {
         recordedBy: r.recordedBy || '—',
         detail: `Repayment toward loan`,
         originalId: r.id,
-        canRemove: true
+        canRemove: true,
+        justification: null
       });
     });
 
@@ -717,7 +754,8 @@ export default function SusuTracker() {
         recordedBy: t.recordedBy || '—',
         detail: `${t.direction === 'ef-to-pot' ? 'EF → Pot' : 'Pot → EF'} · ${t.reason || 'No reason given'}`,
         originalId: t.id,
-        canRemove: true
+        canRemove: true,
+        justification: null
       });
     });
 
@@ -754,7 +792,8 @@ export default function SusuTracker() {
         amount: amountDisplay,
         recordedBy: r.removedBy || '—',
         detail: detailText,
-        canRemove: false
+        canRemove: false,
+        justification: r.justification || '—'
       });
     });
 
@@ -780,7 +819,7 @@ export default function SusuTracker() {
   }, [allTransactions, txType, txSearch, txFrom, txTo]);
 
   // ============================================
-  // ACTIONS
+  // ACTIONS (with justification support)
   // ============================================
   function requireName() {
     setEditingName(true);
@@ -810,14 +849,15 @@ export default function SusuTracker() {
         kind: 'member_added',
         removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName },
         removedAt: new Date().toISOString(),
-        removedBy: recorderName
+        removedBy: recorderName,
+        justification: `Member added`
       };
       persist({ ...next, removedLog: [...next.removedLog, logEntry] });
     };
     wrapWithPasswordCheck(action, 'Add member');
   }
 
-  function removeMember(id) {
+  function removeMember(id, justification) {
     const action = () => {
       const member = data.members.find(m => m.id === id);
       const logEntry = {
@@ -825,7 +865,8 @@ export default function SusuTracker() {
         kind: 'member_removed',
         removedEntry: { memberName: member?.name || 'Unknown', memberId: id, recordedBy: recorderName },
         removedAt: new Date().toISOString(),
-        removedBy: recorderName
+        removedBy: recorderName,
+        justification: justification || 'Member removed'
       };
       const next = {
         ...data,
@@ -835,6 +876,110 @@ export default function SusuTracker() {
       persist(next);
     };
     wrapWithPasswordCheck(action, 'Remove member');
+  }
+
+  function removeContribution(id, justification) {
+    const action = () => {
+      const removed = data.contributions.find((c) => c.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'contribution',
+        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName,
+        justification: justification || 'Contribution removed'
+      };
+      persist({
+        ...data,
+        contributions: data.contributions.filter((c) => c.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove contribution');
+  }
+
+  function removePayout(id, justification) {
+    const action = () => {
+      const removed = data.payouts.find((p) => p.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'payout',
+        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName,
+        justification: justification || 'Payout removed'
+      };
+      persist({
+        ...data,
+        payouts: data.payouts.filter((p) => p.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove payout');
+  }
+
+  function removeWithdrawal(id, justification) {
+    const action = () => {
+      const removed = data.efWithdrawals.find((w) => w.id === id);
+      const logEntry = {
+        id: uid(),
+        kind: 'withdrawal',
+        removedEntry: { ...removed, memberName: removed?.memberId ? (memberById[removed.memberId]?.name || 'Unknown') : 'General fund' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName,
+        justification: justification || 'EF withdrawal removed'
+      };
+      const remainingRepayments = (data.efRepayments || []).filter(r => r.loanId !== id);
+      persist({
+        ...data,
+        efWithdrawals: data.efWithdrawals.filter((w) => w.id !== id),
+        efRepayments: remainingRepayments,
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove EF withdrawal');
+  }
+
+  function removeRepayment(id, justification) {
+    const action = () => {
+      const removed = (data.efRepayments || []).find(r => r.id === id);
+      if (!removed) return;
+      const logEntry = {
+        id: uid(),
+        kind: 'repayment',
+        removedEntry: { ...removed, memberName: memberById[removed.memberId]?.name || 'Unknown' },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName,
+        justification: justification || 'Repayment removed'
+      };
+      persist({
+        ...data,
+        efRepayments: (data.efRepayments || []).filter(r => r.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove repayment');
+  }
+
+  function removeTransfer(id, justification) {
+    const action = () => {
+      const removed = (data.transfers || []).find(t => t.id === id);
+      if (!removed) return;
+      const logEntry = {
+        id: uid(),
+        kind: 'transfer',
+        removedEntry: { ...removed },
+        removedAt: new Date().toISOString(),
+        removedBy: recorderName,
+        justification: justification || 'Transfer removed'
+      };
+      persist({
+        ...data,
+        transfers: (data.transfers || []).filter(t => t.id !== id),
+        removedLog: [...data.removedLog, logEntry],
+      });
+    };
+    wrapWithPasswordCheck(action, 'Remove transfer');
   }
 
   function addContribution() {
@@ -862,25 +1007,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Record contribution');
   }
 
-  function removeContribution(id) {
-    const action = () => {
-      const removed = data.contributions.find((c) => c.id === id);
-      const logEntry = {
-        id: uid(),
-        kind: 'contribution',
-        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
-        removedAt: new Date().toISOString(),
-        removedBy: recorderName
-      };
-      persist({
-        ...data,
-        contributions: data.contributions.filter((c) => c.id !== id),
-        removedLog: [...data.removedLog, logEntry],
-      });
-    };
-    wrapWithPasswordCheck(action, 'Remove contribution');
-  }
-
   function addPayout() {
     const amount = parseFloat(pAmount);
     if (!pMember || !amount || amount <= 0) return;
@@ -893,25 +1019,6 @@ export default function SusuTracker() {
       setPAmount("");
     };
     wrapWithPasswordCheck(action, 'Record payout');
-  }
-
-  function removePayout(id) {
-    const action = () => {
-      const removed = data.payouts.find((p) => p.id === id);
-      const logEntry = {
-        id: uid(),
-        kind: 'payout',
-        removedEntry: { ...removed, memberName: memberById[removed?.memberId]?.name || 'Unknown' },
-        removedAt: new Date().toISOString(),
-        removedBy: recorderName
-      };
-      persist({
-        ...data,
-        payouts: data.payouts.filter((p) => p.id !== id),
-        removedLog: [...data.removedLog, logEntry],
-      });
-    };
-    wrapWithPasswordCheck(action, 'Remove payout');
   }
 
   function addWithdrawal() {
@@ -935,27 +1042,6 @@ export default function SusuTracker() {
       setEMember("");
     };
     wrapWithPasswordCheck(action, 'Record EF withdrawal');
-  }
-
-  function removeWithdrawal(id) {
-    const action = () => {
-      const removed = data.efWithdrawals.find((w) => w.id === id);
-      const logEntry = {
-        id: uid(),
-        kind: 'withdrawal',
-        removedEntry: { ...removed, memberName: removed?.memberId ? (memberById[removed.memberId]?.name || 'Unknown') : 'General fund' },
-        removedAt: new Date().toISOString(),
-        removedBy: recorderName
-      };
-      const remainingRepayments = (data.efRepayments || []).filter(r => r.loanId !== id);
-      persist({
-        ...data,
-        efWithdrawals: data.efWithdrawals.filter((w) => w.id !== id),
-        efRepayments: remainingRepayments,
-        removedLog: [...data.removedLog, logEntry],
-      });
-    };
-    wrapWithPasswordCheck(action, 'Remove EF withdrawal');
   }
 
   function addRepayment(loanId, memberId, amount) {
@@ -984,26 +1070,6 @@ export default function SusuTracker() {
       setNotice({ type: "warning", text: `Repayment of ${fmt(amount)} recorded. Remaining: ${fmt(remaining - amount)}` });
     };
     wrapWithPasswordCheck(action, 'Record repayment');
-  }
-
-  function removeRepayment(id) {
-    const action = () => {
-      const removed = (data.efRepayments || []).find(r => r.id === id);
-      if (!removed) return;
-      const logEntry = {
-        id: uid(),
-        kind: 'repayment',
-        removedEntry: { ...removed, memberName: memberById[removed.memberId]?.name || 'Unknown' },
-        removedAt: new Date().toISOString(),
-        removedBy: recorderName
-      };
-      persist({
-        ...data,
-        efRepayments: (data.efRepayments || []).filter(r => r.id !== id),
-        removedLog: [...data.removedLog, logEntry],
-      });
-    };
-    wrapWithPasswordCheck(action, 'Remove repayment');
   }
 
   function executeTransfer() {
@@ -1048,26 +1114,6 @@ export default function SusuTracker() {
     wrapWithPasswordCheck(action, 'Execute transfer');
   }
 
-  function removeTransfer(id) {
-    const action = () => {
-      const removed = (data.transfers || []).find(t => t.id === id);
-      if (!removed) return;
-      const logEntry = {
-        id: uid(),
-        kind: 'transfer',
-        removedEntry: { ...removed },
-        removedAt: new Date().toISOString(),
-        removedBy: recorderName
-      };
-      persist({
-        ...data,
-        transfers: (data.transfers || []).filter(t => t.id !== id),
-        removedLog: [...data.removedLog, logEntry],
-      });
-    };
-    wrapWithPasswordCheck(action, 'Remove transfer');
-  }
-
   function updatePasswordSetting() {
     const action = () => {
       const settings = {
@@ -1091,12 +1137,32 @@ export default function SusuTracker() {
       return;
     }
     const type = entry.type;
-    if (type === 'contribution') removeContribution(entry.originalId);
-    else if (type === 'payout') removePayout(entry.originalId);
-    else if (type === 'withdrawal') removeWithdrawal(entry.originalId);
-    else if (type === 'repayment') removeRepayment(entry.originalId);
-    else if (type === 'transfer') removeTransfer(entry.originalId);
-    else setNotice({ type: "error", text: "Cannot remove this type of entry." });
+    const memberName = entry.memberName || 'item';
+    let actionLabel = '';
+    let actionFn = null;
+    
+    if (type === 'contribution') {
+      actionLabel = `remove contribution for ${memberName}`;
+      actionFn = (justification) => removeContribution(entry.originalId, justification);
+    } else if (type === 'payout') {
+      actionLabel = `remove payout for ${memberName}`;
+      actionFn = (justification) => removePayout(entry.originalId, justification);
+    } else if (type === 'withdrawal') {
+      actionLabel = `remove EF withdrawal for ${memberName}`;
+      actionFn = (justification) => removeWithdrawal(entry.originalId, justification);
+    } else if (type === 'repayment') {
+      actionLabel = `remove EF repayment for ${memberName}`;
+      actionFn = (justification) => removeRepayment(entry.originalId, justification);
+    } else if (type === 'transfer') {
+      actionLabel = `remove transfer`;
+      actionFn = (justification) => removeTransfer(entry.originalId, justification);
+    } else {
+      setNotice({ type: "error", text: "Cannot remove this type of entry." });
+      return;
+    }
+    
+    // Show confirmation modal
+    confirmRemove(actionFn, memberName, actionLabel);
   }
 
   // ============================================
@@ -1144,7 +1210,6 @@ The user can then re-enable password protection with a new password.
   const radius = 96;
   const n = perMember.length;
 
-  // Tabs for view-only: only "overview"
   const allTabs = [
     ["overview", "Members"],
     ["contributions", "Contributions"],
@@ -1181,7 +1246,6 @@ The user can then re-enable password protection with a new password.
               <p style={styles.eyebrow}>Ledger</p>
               <h1 style={styles.h1}>Brundige Family Trust</h1>
             </div>
-            {/* Est. 2026 Badge */}
             <div style={{
               background: "rgba(201,150,43,0.15)",
               border: "1px solid #C9962B",
@@ -1208,7 +1272,6 @@ The user can then re-enable password protection with a new password.
               <span style={styles.syncDot} />
               Shared with group{syncedAt ? ` · synced ${syncedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
             </button>
-            {/* Hide name input in view-only */}
             {!isViewOnly && (
               editingName ? (
                 <div style={styles.nameForm}>
@@ -1253,7 +1316,6 @@ The user can then re-enable password protection with a new password.
                     <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="600" fontFamily="var(--body)" fill={isNext ? "#3A2A05" : "#E7F1E9"}>
                       {m.name.slice(0, 2).toUpperCase()}
                     </text>
-                    {/* Add title for hover tooltip with full name */}
                     <title>{m.name}</title>
                   </g>
                 );
@@ -1348,7 +1410,6 @@ The user can then re-enable password protection with a new password.
               </div>
             )}
 
-            {/* Legend */}
             <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
               <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
               <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not Current (paid last month)</span>
@@ -1400,7 +1461,7 @@ The user can then re-enable password protection with a new password.
                           <>
                             <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
                             <td style={styles.td}>
-                              <button style={styles.btnGhostSmall} onClick={() => removeMember(m.id)}>Remove</button>
+                              <button style={styles.btnGhostSmall} onClick={() => confirmRemove(removeMember, m.name, 'remove member')}>Remove</button>
                             </td>
                           </>
                         )}
@@ -1413,7 +1474,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
-        {/* Other tabs are only rendered if not view-only, but they won't be shown due to nav filtering */}
+        {/* ===== CONTRIBUTIONS ===== */}
         {!isViewOnly && tab === "contributions" && (
           <section>
             <div style={styles.formGrid}>
@@ -1464,7 +1525,10 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="To fund">{fmt(c.efShare || 0)}</td>
                       <td style={styles.td} data-label="Recorded By">{c.recordedBy ? `Recorded By ${c.recordedBy}` : "—"}</td>
                       <td style={styles.td}>
-                        <button style={styles.btnGhostSmall} onClick={() => removeContribution(c.id)}>Remove</button>
+                        <button style={styles.btnGhostSmall} onClick={() => {
+                          const memberName = memberById[c.memberId]?.name || 'this contribution';
+                          confirmRemove(removeContribution, memberName, 'remove contribution');
+                        }}>Remove</button>
                       </td>
                     </tr>
                   ))}
@@ -1474,6 +1538,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
+        {/* ===== PAYOUTS ===== */}
         {!isViewOnly && tab === "payouts" && (
           <section>
             <div style={styles.formGrid}>
@@ -1509,7 +1574,10 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="Amount">{fmt(p.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{p.recordedBy ? `Recorded By ${p.recordedBy}` : "—"}</td>
                       <td style={styles.td}>
-                        <button style={styles.btnGhostSmall} onClick={() => removePayout(p.id)}>Remove</button>
+                        <button style={styles.btnGhostSmall} onClick={() => {
+                          const memberName = memberById[p.memberId]?.name || 'this payout';
+                          confirmRemove(removePayout, memberName, 'remove payout');
+                        }}>Remove</button>
                       </td>
                     </tr>
                   ))}
@@ -1519,6 +1587,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
+        {/* ===== EMERGENCY FUND ===== */}
         {!isViewOnly && tab === "fund" && (
           <section>
             <div style={styles.fundBalanceCard}>
@@ -1613,7 +1682,10 @@ The user can then re-enable password protection with a new password.
                             {remaining > 0.01 && (
                               <button style={styles.btnGhostSmall} onClick={() => { setRepayLoanId(w.id); setRepayAmount(""); }}>Repay</button>
                             )}
-                            <button style={styles.btnGhostSmall} onClick={() => removeWithdrawal(w.id)}>Remove</button>
+                            <button style={styles.btnGhostSmall} onClick={() => {
+                              const memberName = w.memberId ? (memberById[w.memberId]?.name || 'this EF withdrawal') : 'this general fund withdrawal';
+                              confirmRemove(removeWithdrawal, memberName, 'remove EF withdrawal');
+                            }}>Remove</button>
                           </td>
                         </tr>
                       );
@@ -1653,7 +1725,7 @@ The user can then re-enable password protection with a new password.
                             <td style={styles.td} data-label="Justification">{t.reason}</td>
                             <td style={styles.td} data-label="Recorded By">{t.recordedBy || '—'}</td>
                             <td style={styles.td}>
-                              <button style={styles.btnGhostSmall} onClick={() => removeTransfer(t.id)}>Remove</button>
+                              <button style={styles.btnGhostSmall} onClick={() => confirmRemove(removeTransfer, 'transfer', 'remove transfer')}>Remove</button>
                             </td>
                           </tr>
                         ))}
@@ -1666,6 +1738,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
+        {/* ===== LOANS ===== */}
         {!isViewOnly && tab === "loans" && (
           <section>
             <h3 style={{ marginBottom: 12 }}>Outstanding Emergency Fund Loans</h3>
@@ -1702,6 +1775,7 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
+        {/* ===== TRANSACTIONS ===== */}
         {!isViewOnly && tab === "transactions" && (
           <section>
             <p style={styles.hint}>Full audit log of every transaction. Items marked with "Audit" cannot be deleted.</p>
@@ -1737,6 +1811,7 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Amount</th>
                     <th style={styles.th}>Recorded By</th>
                     <th style={styles.th}>Details</th>
+                    <th style={styles.th}>Justification</th>
                     <th style={styles.th}></th>
                   </tr>
                 </thead>
@@ -1752,6 +1827,7 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td} data-label="Amount">{fmt(t.amount)}</td>
                       <td style={styles.td} data-label="Recorded By">{t.recordedBy}</td>
                       <td style={styles.td} data-label="Details">{t.detail}</td>
+                      <td style={styles.td} data-label="Justification">{t.justification || '—'}</td>
                       <td style={styles.td} data-label="Actions">
                         {t.canRemove && (
                           <button style={styles.btnGhostSmall} onClick={() => removeTransaction(t)}>Remove</button>
@@ -1766,138 +1842,135 @@ The user can then re-enable password protection with a new password.
           </section>
         )}
 
+        {/* ===== SETTINGS ===== */}
         {!isViewOnly && tab === "settings" && (
           <section>
             <h3 style={{ marginBottom: 12 }}>App Settings</h3>
 
-            {isViewOnly ? (
-              <p style={styles.empty}>Settings are not available in view-only mode.</p>
-            ) : (
-              <>
-                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-                    <label style={{ fontWeight: 600 }}>Password Protection</label>
-                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
-                      When enabled, all write actions (add, remove, transfer, repay) will require a password.
-                      You only need to enter it once per browser session.
-                    </p>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={passwordToggle}
-                        onChange={(e) => {
-                          setPasswordToggle(e.target.checked);
-                          if (!e.target.checked) {
-                            const settings = { requirePassword: false, password: '' };
-                            persist({ ...data, settings });
-                            setNewPassword("");
-                            setNotice({ type: "warning", text: "Password protection disabled." });
-                            sessionStorage.removeItem('susu_password_authorized');
-                            setSessionAuthorized(false);
-                            setSettingsAccessGranted(false);
-                          }
-                        }}
-                      />
-                      Require password for changes
-                    </label>
-                  </div>
+            <>
+              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+                  <label style={{ fontWeight: 600 }}>Password Protection</label>
+                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
+                    When enabled, all write actions (add, remove, transfer, repay) will require a password.
+                    You only need to enter it once per browser session.
+                  </p>
                 </div>
-
-                {passwordToggle && (
-                  <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
                     <input
-                      style={styles.input}
-                      type={showPasswordText ? "text" : "password"}
-                      placeholder="Set new password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
+                      type="checkbox"
+                      checked={passwordToggle}
+                      onChange={(e) => {
+                        setPasswordToggle(e.target.checked);
+                        if (!e.target.checked) {
+                          const settings = { requirePassword: false, password: '' };
+                          persist({ ...data, settings });
+                          setNewPassword("");
+                          setNotice({ type: "warning", text: "Password protection disabled." });
+                          sessionStorage.removeItem('susu_password_authorized');
+                          setSessionAuthorized(false);
+                          setSettingsAccessGranted(false);
+                        }
+                      }}
                     />
-                    <button style={styles.btnPrimary} onClick={() => {
-                      if (!newPassword.trim()) {
-                        setNotice({ type: "error", text: "Please enter a password." });
-                        return;
-                      }
-                      const settings = { requirePassword: true, password: newPassword.trim() };
-                      persist({ ...data, settings });
-                      setPasswordToggle(true);
-                      setNotice({ type: "warning", text: `Password protection enabled.` });
-                    }}>Set Password</button>
-                    {data.settings?.password && (
-                      <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
-                        Current password:
-                        <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
-                          {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
-                        </span>
-                        <button
-                          style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
-                          onClick={() => setShowPasswordText(!showPasswordText)}
-                        >
-                          {showPasswordText ? 'Hide' : 'Show'}
-                        </button>
+                    Require password for changes
+                  </label>
+                </div>
+              </div>
+
+              {passwordToggle && (
+                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
+                  <input
+                    style={styles.input}
+                    type={showPasswordText ? "text" : "password"}
+                    placeholder="Set new password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                  />
+                  <button style={styles.btnPrimary} onClick={() => {
+                    if (!newPassword.trim()) {
+                      setNotice({ type: "error", text: "Please enter a password." });
+                      return;
+                    }
+                    const settings = { requirePassword: true, password: newPassword.trim() };
+                    persist({ ...data, settings });
+                    setPasswordToggle(true);
+                    setNotice({ type: "warning", text: `Password protection enabled.` });
+                  }}>Set Password</button>
+                  {data.settings?.password && (
+                    <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
+                      Current password:
+                      <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
+                        {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
                       </span>
-                    )}
-                  </div>
-                )}
-
-                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ fontWeight: 600 }}>View-Only Link</label>
-                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                      Share this link with members who should only view data, not make changes:
-                    </p>
-                    <code style={{
-                      display: "block",
-                      background: "#123B22",
-                      color: "#F3D48A",
-                      padding: "10px",
-                      borderRadius: 6,
-                      fontSize: 13,
-                      wordBreak: "break-all",
-                      marginTop: 8
-                    }}>
-                      {window.location.origin}{window.location.pathname}?mode=view
-                    </code>
-                    <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?mode=view`);
-                      setNotice({ type: "warning", text: "View-only link copied to clipboard!" });
-                    }}>Copy Link</button>
-                  </div>
+                      <button
+                        style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
+                        onClick={() => setShowPasswordText(!showPasswordText)}
+                      >
+                        {showPasswordText ? 'Hide' : 'Show'}
+                      </button>
+                    </span>
+                  )}
                 </div>
+              )}
 
-                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
-                  <div style={{ flex: 1 }}>
-                    <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
-                    <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                      Share this link with treasurers who need to make changes:
-                    </p>
-                    <code style={{
-                      display: "block",
-                      background: "#123B22",
-                      color: "#F3D48A",
-                      padding: "10px",
-                      borderRadius: 6,
-                      fontSize: 13,
-                      wordBreak: "break-all",
-                      marginTop: 8
-                    }}>
-                      {window.location.origin}{window.location.pathname}
-                    </code>
-                    <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
-                      navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
-                      setNotice({ type: "warning", text: "Edit link copied to clipboard!" });
-                    }}>Copy Link</button>
-                  </div>
+              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontWeight: 600 }}>View-Only Link</label>
+                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                    Share this link with members who should only view data, not make changes:
+                  </p>
+                  <code style={{
+                    display: "block",
+                    background: "#123B22",
+                    color: "#F3D48A",
+                    padding: "10px",
+                    borderRadius: 6,
+                    fontSize: 13,
+                    wordBreak: "break-all",
+                    marginTop: 8
+                  }}>
+                    {window.location.origin}{window.location.pathname}?mode=view
+                  </code>
+                  <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?mode=view`);
+                    setNotice({ type: "warning", text: "View-only link copied to clipboard!" });
+                  }}>Copy Link</button>
                 </div>
+              </div>
 
-                {sessionAuthorized && (
-                  <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
-                    <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
-                  </div>
-                )}
-              </>
-            )}
+              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
+                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                    Share this link with treasurers who need to make changes:
+                  </p>
+                  <code style={{
+                    display: "block",
+                    background: "#123B22",
+                    color: "#F3D48A",
+                    padding: "10px",
+                    borderRadius: 6,
+                    fontSize: 13,
+                    wordBreak: "break-all",
+                    marginTop: 8
+                  }}>
+                    {window.location.origin}{window.location.pathname}
+                  </code>
+                  <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
+                    setNotice({ type: "warning", text: "Edit link copied to clipboard!" });
+                  }}>Copy Link</button>
+                </div>
+              </div>
+
+              {sessionAuthorized && (
+                <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
+                  <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
+                </div>
+              )}
+            </>
           </section>
         )}
       </main>
@@ -1979,6 +2052,36 @@ The user can then re-enable password protection with a new password.
               <button style={styles.btnPrimary} onClick={executePendingAction}>Submit</button>
               <button style={styles.btnGhostSmall} onClick={cancelPasswordModal}>Cancel</button>
               <button style={{ ...styles.btnGhostSmall, color: "#9C4A2E" }} onClick={() => { setShowPasswordModal(false); setShowForgotPasswordModal(true); }}>Forgot Password?</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== CONFIRMATION / JUSTIFICATION MODAL ===== */}
+      {showConfirmModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modal}>
+            <h3 style={{ marginTop: 0 }}>⚠️ Confirm Action</h3>
+            <p style={{ fontSize: 14 }}>{confirmMessage}</p>
+            <p style={{ fontSize: 12, color: "#5F5E5A", marginTop: 4 }}>Please provide a justification for this action:</p>
+            <textarea
+              style={{
+                ...styles.input,
+                width: "100%",
+                minHeight: "60px",
+                resize: "vertical",
+                marginTop: 8,
+                fontFamily: "var(--body)",
+                padding: "8px 12px"
+              }}
+              placeholder="Enter justification (required)..."
+              value={confirmJustification}
+              onChange={(e) => setConfirmJustification(e.target.value)}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+              <button style={styles.btnPrimary} onClick={executeConfirmedAction}>Confirm</button>
+              <button style={styles.btnGhostSmall} onClick={cancelConfirmModal}>Cancel</button>
             </div>
           </div>
         </div>
