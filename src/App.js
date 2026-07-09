@@ -497,9 +497,7 @@ export default function SusuTracker() {
       return;
     }
     setShowConfirmModal(false);
-    // Wrap the action with password check, passing justification
     const wrappedAction = () => {
-      // The action function should accept justification as an argument
       if (confirmAction) {
         confirmAction.actionFn(confirmJustification.trim());
       }
@@ -1161,7 +1159,6 @@ export default function SusuTracker() {
       return;
     }
     
-    // Show confirmation modal
     confirmRemove(actionFn, memberName, actionLabel);
   }
 
@@ -1410,12 +1407,15 @@ The user can then re-enable password protection with a new password.
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
-              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
-              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not Current (paid last month)</span>
-              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#C62828", marginRight: 4 }}></span> Late (unpaid after 5th)</span>
-              <span style={{ color: "#5F5E5A" }}>| Prepaid: <strong>N</strong> months ahead</span>
-            </div>
+            {/* Legend - only visible to treasurers */}
+            {!isViewOnly && (
+              <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
+                <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
+                <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not Current (paid last month)</span>
+                <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#C62828", marginRight: 4 }}></span> Late (unpaid after 5th)</span>
+                <span style={{ color: "#5F5E5A" }}>| Prepaid: <strong>N</strong> months ahead</span>
+              </div>
+            )}
 
             {perMember.length === 0 ? (
               <p style={styles.empty}>No members yet. Add the first person in your susu circle above.</p>
@@ -1428,21 +1428,32 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Contributed</th>
                     <th style={styles.th}>Received</th>
                     <th style={styles.th}>EF Balance</th>
-                    <th style={styles.th}>Status</th>
-                    <th style={styles.th}>Prepaid</th>
+                    {/* Status and Prepaid only for treasurers */}
+                    {!isViewOnly && <th style={styles.th}>Status</th>}
+                    {!isViewOnly && <th style={styles.th}>Prepaid</th>}
                     {!isViewOnly && <th style={styles.th}>Recorded By</th>}
                     {!isViewOnly && <th style={styles.th}></th>}
                   </tr>
                 </thead>
                 <tbody>
                   {perMember.map((m) => {
-                    const statusColor = m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828');
                     const displayName = isViewOnly ? maskName(m.name) : m.name;
+                    const isAdult = m.type === 'adult';
                     return (
                       <tr key={m.id}>
                         <td style={styles.td} data-label="Member">
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: statusColor, flexShrink: 0 }}></span>
+                            {/* Show status dot only for adults and only for treasurers */}
+                            {!isViewOnly && isAdult && (
+                              <span style={{ 
+                                display: 'inline-block', 
+                                width: 10, 
+                                height: 10, 
+                                borderRadius: '50%', 
+                                background: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'), 
+                                flexShrink: 0 
+                              }}></span>
+                            )}
                             {displayName}
                             {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
                           </span>
@@ -1451,14 +1462,21 @@ The user can then re-enable password protection with a new password.
                         <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
                         <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
                         <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
-                        <td style={styles.td} data-label="Status">
-                          <span style={{ color: statusColor, fontWeight: 600 }}>{m.statusLabel}</span>
-                        </td>
-                        <td style={styles.td} data-label="Prepaid">
-                          {m.prepaidCount > 0 ? `${m.prepaidCount} month${m.prepaidCount > 1 ? 's' : ''}` : '—'}
-                        </td>
+                        
                         {!isViewOnly && (
                           <>
+                            <td style={styles.td} data-label="Status">
+                              {isAdult ? (
+                                <span style={{ color: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'), fontWeight: 600 }}>
+                                  {m.statusLabel}
+                                </span>
+                              ) : (
+                                '—'
+                              )}
+                            </td>
+                            <td style={styles.td} data-label="Prepaid">
+                              {isAdult && m.prepaidCount > 0 ? `${m.prepaidCount} month${m.prepaidCount > 1 ? 's' : ''}` : '—'}
+                            </td>
                             <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
                             <td style={styles.td}>
                               <button style={styles.btnGhostSmall} onClick={() => confirmRemove(removeMember, m.name, 'remove member')}>Remove</button>
