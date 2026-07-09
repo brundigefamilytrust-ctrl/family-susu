@@ -105,7 +105,6 @@ function getUTCDateRange(localDateStr) {
   };
 }
 
-// Mask full name: first name + last initial
 function maskName(fullName) {
   if (!fullName) return '';
   const parts = fullName.trim().split(/\s+/);
@@ -520,6 +519,11 @@ export default function SusuTracker() {
   }, [data]);
 
   const perMember = useMemo(() => {
+    // Get today's day of month in Eastern time
+    const now = new Date();
+    const eastern = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', day: 'numeric' }).format(now);
+    const todayDay = parseInt(eastern);
+
     return data.members.map((m) => {
       const contributed = data.contributions
         .filter((c) => c.memberId === m.id)
@@ -556,20 +560,37 @@ export default function SusuTracker() {
       
       let status = 'red';
       let statusLabel = 'Late';
+      
       if (paidThisMonth) {
         status = 'green';
         statusLabel = 'Current';
       } else {
+        // Not paid this month
         const lastMonth = new Date();
         lastMonth.setMonth(lastMonth.getMonth() - 1);
         const lastMonthStr = lastMonth.getFullYear() + '-' + String(lastMonth.getMonth()+1).padStart(2, '0');
         const paidLastMonth = data.contributions.some(c => c.memberId === m.id && c.month === lastMonthStr);
-        if (paidLastMonth) {
-          status = 'yellow';
-          statusLabel = 'Not Current (Paid Last Month)';
+        
+        // Late only if today > 5 and not paid this month and not paid last month
+        if (todayDay > 5) {
+          // After 5th, if not paid this month
+          if (paidLastMonth) {
+            status = 'yellow';
+            statusLabel = 'Not Current (Paid Last Month)';
+          } else {
+            status = 'red';
+            statusLabel = 'Late';
+          }
         } else {
-          status = 'red';
-          statusLabel = 'Late';
+          // Before or on the 5th, not considered late
+          if (paidLastMonth) {
+            status = 'yellow';
+            statusLabel = 'Not Current (Paid Last Month)';
+          } else {
+            // Even if they didn't pay last month, before 5th they are not late
+            status = 'yellow'; // or maybe orange? We'll keep yellow with a note
+            statusLabel = 'Pending (Due by 5th)';
+          }
         }
       }
       
@@ -1187,23 +1208,26 @@ The user can then re-enable password protection with a new password.
               <span style={styles.syncDot} />
               Shared with group{syncedAt ? ` · synced ${syncedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
             </button>
-            {editingName ? (
-              <div style={styles.nameForm}>
-                <input
-                  ref={nameInputRef}
-                  autoFocus
-                  style={styles.nameInput}
-                  placeholder="Your name"
-                  value={nameDraft}
-                  onChange={(e) => setNameDraft(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { setRecorderName(nameDraft); setEditingName(false); setNotice(null); } }}
-                />
-                <button style={styles.nameSaveBtn} type="button" onClick={() => { setRecorderName(nameDraft); setEditingName(false); setNotice(null); }}>Set</button>
-              </div>
-            ) : (
-              <button onClick={() => setEditingName(true)} style={styles.recorderBadge} type="button">
-                Recording as <strong>{recorderName}</strong> · change
-              </button>
+            {/* Hide name input in view-only */}
+            {!isViewOnly && (
+              editingName ? (
+                <div style={styles.nameForm}>
+                  <input
+                    ref={nameInputRef}
+                    autoFocus
+                    style={styles.nameInput}
+                    placeholder="Your name"
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { setRecorderName(nameDraft); setEditingName(false); setNotice(null); } }}
+                  />
+                  <button style={styles.nameSaveBtn} type="button" onClick={() => { setRecorderName(nameDraft); setEditingName(false); setNotice(null); }}>Set</button>
+                </div>
+              ) : (
+                <button onClick={() => setEditingName(true)} style={styles.recorderBadge} type="button">
+                  Recording as <strong>{recorderName}</strong> · change
+                </button>
+              )
             )}
             {data.settings?.requirePassword && (
               <span style={{ fontSize: 11, color: "#F3D48A", background: "#2F6B44", padding: "2px 10px", borderRadius: 999 }}>
@@ -1229,6 +1253,8 @@ The user can then re-enable password protection with a new password.
                     <text x={x} y={y + 4} textAnchor="middle" fontSize="10" fontWeight="600" fontFamily="var(--body)" fill={isNext ? "#3A2A05" : "#E7F1E9"}>
                       {m.name.slice(0, 2).toUpperCase()}
                     </text>
+                    {/* Add title for hover tooltip with full name */}
+                    <title>{m.name}</title>
                   </g>
                 );
               })}
@@ -1325,8 +1351,8 @@ The user can then re-enable password protection with a new password.
             {/* Legend */}
             <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
               <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
-              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not current (paid last month)</span>
-              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#C62828", marginRight: 4 }}></span> Late (no payment this or last month)</span>
+              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#F9A825", marginRight: 4 }}></span> Not Current (paid last month)</span>
+              <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#C62828", marginRight: 4 }}></span> Late (unpaid after 5th)</span>
               <span style={{ color: "#5F5E5A" }}>| Prepaid: <strong>N</strong> months ahead</span>
             </div>
 
@@ -1350,7 +1376,6 @@ The user can then re-enable password protection with a new password.
                 <tbody>
                   {perMember.map((m) => {
                     const statusColor = m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828');
-                    // Mask name if view-only
                     const displayName = isViewOnly ? maskName(m.name) : m.name;
                     return (
                       <tr key={m.id}>
