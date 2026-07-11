@@ -17,6 +17,7 @@ const ADULT_CONTRIBUTION = 50;
 const CHILD_CONTRIBUTION = 25;
 const POT_PCT = 0.7;
 const EF_PCT = 0.3;
+const DEFAULT_CYCLE_START = "2026-07-01";
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -114,6 +115,18 @@ function maskName(fullName) {
   return `${firstName} ${lastInitial}.`;
 }
 
+function monthsBetween(date1, date2) {
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  let months = (d2.getFullYear() - d1.getFullYear()) * 12;
+  months -= d1.getMonth();
+  months += d2.getMonth();
+  return months;
+}
+
+// ============================================
+// EMPTY DATA
+// ============================================
 const emptyData = {
   members: [],
   contributions: [],
@@ -126,6 +139,14 @@ const emptyData = {
   settings: {
     requirePassword: false,
     password: ''
+  },
+  cycle: {
+    startDate: DEFAULT_CYCLE_START,
+    frequencyMonths: 1,
+    adultCountAtStart: 0,
+    payoutBalance: 0,
+    isLocked: false,
+    currentPayoutIndex: 0
   },
   version: 0,
   updatedAt: null
@@ -154,7 +175,7 @@ export default function SusuTracker() {
   const [sessionAuthorized, setSessionAuthorized] = useState(() => {
     return sessionStorage.getItem('susu_password_authorized') === 'true';
   });
-  
+
   // ----- Settings password lock -----
   const [settingsPasswordInput, setSettingsPasswordInput] = useState("");
   const [showSettingsPasswordModal, setShowSettingsPasswordModal] = useState(false);
@@ -167,6 +188,11 @@ export default function SusuTracker() {
   const [confirmAction, setConfirmAction] = useState(null);
   const [confirmJustification, setConfirmJustification] = useState("");
   const [confirmMessage, setConfirmMessage] = useState("");
+
+  // ----- Cycle settings UI -----
+  const [cycleStartDate, setCycleStartDate] = useState(DEFAULT_CYCLE_START);
+  const [cycleFrequency, setCycleFrequency] = useState(1);
+  const [cycleLocked, setCycleLocked] = useState(false);
 
   // ----- View-only mode -----
   const isViewOnly = useMemo(() => {
@@ -320,6 +346,17 @@ export default function SusuTracker() {
         if (!parsed.transfers) {
           parsed.transfers = [];
         }
+        if (!parsed.cycle) {
+          const adultCount = (parsed.members || []).filter(m => m.type === 'adult').length;
+          parsed.cycle = {
+            startDate: DEFAULT_CYCLE_START,
+            frequencyMonths: 1,
+            adultCountAtStart: adultCount,
+            payoutBalance: adultCount * 50 * 1 * 0.7,
+            isLocked: false,
+            currentPayoutIndex: 0
+          };
+        }
         if (parsed.version === undefined) {
           parsed.version = 0;
         }
@@ -330,6 +367,12 @@ export default function SusuTracker() {
           lastKnownUpdatedAt.current = remoteUpdatedAt;
           lastKnownVersion.current = parsed.version || 0;
           setPasswordToggle(parsed.settings?.requirePassword || false);
+          // Sync cycle UI state
+          if (parsed.cycle) {
+            setCycleStartDate(parsed.cycle.startDate || DEFAULT_CYCLE_START);
+            setCycleFrequency(parsed.cycle.frequencyMonths || 1);
+            setCycleLocked(parsed.cycle.isLocked || false);
+          }
         }
       }
       setSyncedAt(new Date());
@@ -344,41 +387,41 @@ export default function SusuTracker() {
     const currentVersion = lastKnownVersion.current;
     const nextVersion = (nextRaw.version || 0) + 1;
     const next = { ...nextRaw, version: nextVersion, updatedAt: new Date().toISOString() };
-    
+
     try {
       const { data: current, error: fetchError } = await supabase
         .from('app_state')
         .select('value')
         .eq('key', 'susu_data')
         .single();
-      
+
       if (fetchError) throw fetchError;
-      
+
       if (current && current.value) {
         const currentParsed = current.value;
         const dbVersion = currentParsed.version || 0;
-        
+
         if (dbVersion !== currentVersion) {
-          setNotice({ 
-            type: "error", 
-            text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.` 
+          setNotice({
+            type: "error",
+            text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.`
           });
           await loadShared();
           return;
         }
       }
-      
+
       const { error } = await supabase
         .from('app_state')
         .upsert({ key: 'susu_data', value: next }, { onConflict: 'key' });
-      
+
       if (error) throw error;
-      
+
       lastKnownUpdatedAt.current = next.updatedAt;
       lastKnownVersion.current = nextVersion;
       setData(next);
       setSyncedAt(new Date());
-      
+
     } catch (e) {
       console.log('Save error:', e);
       setNotice({ type: "error", text: "Could not save. Please try again." });
@@ -513,6 +556,22 @@ export default function SusuTracker() {
   }
 
   // ============================================
+  // CYCLE HELPERS
+  // ============================================
+  function calculatePayoutBalance(adultCount, frequencyMonths) {
+    return adultCount * 50 * frequencyMonths * 0.7;
+  }
+
+  function calculateCatchup(joinDate, cycleStart) {
+    const months = monthsBetween(cycleStart, joinDate);
+    return Math.max(0, months) * 50;
+  }
+
+  function getAdultCount() {
+    return data.members.filter(m => m.type === 'adult').length;
+  }
+
+  // ============================================
   // HELPERS
   // ============================================
   const memberById = useMemo(() => {
@@ -530,7 +589,7 @@ export default function SusuTracker() {
     const efIn = data.contributions.reduce((s, c) => s + (c.memberType === 'child' ? c.amount : (c.efShare || 0)), 0);
     const efOut = data.efWithdrawals.reduce((s, w) => s + w.amount, 0);
     const efRepaid = data.efRepayments ? data.efRepayments.reduce((s, r) => s + r.amount, 0) : 0;
-    
+
     const transfers = data.transfers || [];
     let efToPotTotal = 0;
     let potToEfTotal = 0;
@@ -576,11 +635,11 @@ export default function SusuTracker() {
       const efRepaid = data.efRepayments
         .filter((r) => r.memberId === m.id)
         .reduce((s, r) => s + r.amount, 0);
-      
+
       const currentMonth = getCurrentMonthEastern();
       const contributionsThisMonth = data.contributions.filter(c => c.memberId === m.id && c.month === currentMonth);
       const paidThisMonth = contributionsThisMonth.length > 0;
-      
+
       const allMonths = data.contributions
         .filter(c => c.memberId === m.id)
         .map(c => c.month)
@@ -593,10 +652,10 @@ export default function SusuTracker() {
           prepaidCount++;
         }
       }
-      
+
       let status = 'red';
       let statusLabel = 'Late';
-      
+
       if (paidThisMonth) {
         status = 'green';
         statusLabel = 'Current';
@@ -605,7 +664,7 @@ export default function SusuTracker() {
         lastMonth.setMonth(lastMonth.getMonth() - 1);
         const lastMonthStr = lastMonth.getFullYear() + '-' + String(lastMonth.getMonth()+1).padStart(2, '0');
         const paidLastMonth = data.contributions.some(c => c.memberId === m.id && c.month === lastMonthStr);
-        
+
         if (todayDay > 5) {
           if (paidLastMonth) {
             status = 'yellow';
@@ -624,14 +683,14 @@ export default function SusuTracker() {
           }
         }
       }
-      
-      return { 
-        ...m, 
-        contributed, 
-        received, 
-        lastPayoutDate: lastPayout ? lastPayout.date : null, 
-        efReceived, 
-        efRepaid, 
+
+      return {
+        ...m,
+        contributed,
+        received,
+        lastPayoutDate: lastPayout ? lastPayout.date : null,
+        efReceived,
+        efRepaid,
         efBalance: efReceived - efRepaid,
         status,
         statusLabel,
@@ -677,15 +736,19 @@ export default function SusuTracker() {
     const rows = [];
 
     data.contributions.forEach((c) => {
+      let detail = `${c.memberType === 'child' ? 'Child' : 'Adult'} · ${fmt(c.potShare || 0)} to pot, ${fmt(c.efShare || 0)} to fund · ${monthLabel(c.month)}`;
+      if (c.type === 'catchup') {
+        detail = `Catch-up · ${detail}`;
+      }
       rows.push({
         id: `c-${c.id}`,
         type: 'contribution',
-        typeLabel: 'Contribution',
+        typeLabel: c.type === 'catchup' ? 'Catch-up' : 'Contribution',
         date: c.date,
         memberName: memberById[c.memberId]?.name || 'Removed member',
         amount: c.amount,
         recordedBy: c.recordedBy || '—',
-        detail: `${c.memberType === 'child' ? 'Child' : 'Adult'} · ${fmt(c.potShare || 0)} to pot, ${fmt(c.efShare || 0)} to fund · ${monthLabel(c.month)}`,
+        detail: detail,
         originalId: c.id,
         canRemove: true,
         justification: null
@@ -802,7 +865,7 @@ export default function SusuTracker() {
     return allTransactions.filter((t) => {
       if (txType !== 'all' && t.type !== txType) return false;
       if (txSearch.trim() && !t.memberName.toLowerCase().includes(txSearch.trim().toLowerCase())) return false;
-      
+
       if (txFrom) {
         const { startUTC } = getUTCDateRange(txFrom);
         if (t.date < startUTC) return false;
@@ -811,7 +874,7 @@ export default function SusuTracker() {
         const { endUTC } = getUTCDateRange(txTo);
         if (t.date > endUTC) return false;
       }
-      
+
       return true;
     });
   }, [allTransactions, txType, txSearch, txFrom, txTo]);
@@ -836,21 +899,84 @@ export default function SusuTracker() {
     const name = memberName.trim();
     if (!name) return;
     const action = () => {
-      const next = {
-        ...data,
-        members: [...data.members, { id: uid(), name, type: memberType, order: data.members.length, recordedBy: recorderName }],
+      const isAdult = memberType === 'adult';
+      let catchupAmount = 0;
+      let catchupMonths = 0;
+      let catchupContribution = null;
+
+      // Calculate catch-up if adult and cycle is locked
+      if (isAdult && data.cycle && data.cycle.isLocked) {
+        const joinDate = new Date().toISOString().slice(0, 10);
+        catchupMonths = monthsBetween(data.cycle.startDate, joinDate);
+        if (catchupMonths > 0) {
+          catchupAmount = catchupMonths * 50;
+          const potShare = Math.round(catchupAmount * 0.7 * 100) / 100;
+          const efShare = Math.round((catchupAmount - potShare) * 100) / 100;
+          catchupContribution = {
+            id: uid(),
+            memberId: null, // will be set after member is created
+            memberType: 'adult',
+            month: getCurrentMonthEastern(),
+            amount: catchupAmount,
+            potShare: potShare,
+            efShare: efShare,
+            type: 'catchup',
+            date: new Date().toISOString(),
+            recordedBy: recorderName,
+          };
+        }
+      }
+
+      // Create member
+      const newMember = {
+        id: uid(),
+        name,
+        type: memberType,
+        order: data.members.length,
+        recordedBy: recorderName,
+        joinedAt: new Date().toISOString().slice(0, 10),
+        catchupPaid: catchupAmount,
+        catchupMonths: catchupMonths
       };
-      persist(next);
+
+      let nextData = {
+        ...data,
+        members: [...data.members, newMember],
+      };
+
+      // Add catch-up contribution if applicable
+      if (catchupContribution) {
+        catchupContribution.memberId = newMember.id;
+        nextData.contributions = [...nextData.contributions, catchupContribution];
+      }
+
+      // Add to end of payout order if adult and cycle locked
+      if (isAdult && data.cycle && data.cycle.isLocked) {
+        // The member is already added at the end via order
+        // We'll update the nextOverrideId to point to the first member in order if not set
+        if (!nextData.nextOverrideId) {
+          const orderedMembers = [...nextData.members].sort((a, b) => a.order - b.order);
+          if (orderedMembers.length > 0) {
+            nextData.nextOverrideId = orderedMembers[0].id;
+          }
+        }
+      }
+
+      persist(nextData);
       setMemberName("");
       const logEntry = {
         id: uid(),
         kind: 'member_added',
-        removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName },
+        removedEntry: { memberName: name, memberType: memberType, recordedBy: recorderName, catchupAmount: catchupAmount },
         removedAt: new Date().toISOString(),
         removedBy: recorderName,
-        justification: `Member added`
+        justification: `Member added${catchupAmount > 0 ? ` with catch-up of ${fmt(catchupAmount)}` : ''}`
       };
-      persist({ ...next, removedLog: [...next.removedLog, logEntry] });
+      persist({ ...nextData, removedLog: [...nextData.removedLog, logEntry] });
+
+      if (catchupAmount > 0) {
+        setNotice({ type: "warning", text: `Member added with catch-up fee of ${fmt(catchupAmount)} (${catchupMonths} months).` });
+      }
     };
     wrapWithPasswordCheck(action, 'Add member');
   }
@@ -1138,7 +1264,7 @@ export default function SusuTracker() {
     const memberName = entry.memberName || 'item';
     let actionLabel = '';
     let actionFn = null;
-    
+
     if (type === 'contribution') {
       actionLabel = `remove contribution for ${memberName}`;
       actionFn = (justification) => removeContribution(entry.originalId, justification);
@@ -1158,8 +1284,75 @@ export default function SusuTracker() {
       setNotice({ type: "error", text: "Cannot remove this type of entry." });
       return;
     }
-    
+
     confirmRemove(actionFn, memberName, actionLabel);
+  }
+
+  // ============================================
+  // CYCLE SETTINGS ACTIONS
+  // ============================================
+  function lockCycle() {
+    const adultCount = getAdultCount();
+    const payoutBalance = calculatePayoutBalance(adultCount, cycleFrequency);
+    const cycle = {
+      startDate: cycleStartDate,
+      frequencyMonths: cycleFrequency,
+      adultCountAtStart: adultCount,
+      payoutBalance: payoutBalance,
+      isLocked: true,
+      currentPayoutIndex: 0
+    };
+    const action = () => {
+      persist({ ...data, cycle });
+      setCycleLocked(true);
+      setNotice({ type: "warning", text: `Cycle locked. Payout balance: ${fmt(payoutBalance)}` });
+    };
+    wrapWithPasswordCheck(action, 'Lock cycle');
+  }
+
+  function unlockCycle() {
+    // Only allow if no payouts have been made in this cycle
+    const payoutsInCycle = data.payouts.filter(p => {
+      const payoutDate = new Date(p.date);
+      const cycleStart = new Date(data.cycle?.startDate || DEFAULT_CYCLE_START);
+      return payoutDate >= cycleStart;
+    });
+    if (payoutsInCycle.length > 0) {
+      setNotice({ type: "error", text: "Cannot unlock cycle — payouts have already been made." });
+      return;
+    }
+    const action = () => {
+      const cycle = {
+        ...data.cycle,
+        isLocked: false
+      };
+      persist({ ...data, cycle });
+      setCycleLocked(false);
+      setNotice({ type: "warning", text: "Cycle unlocked." });
+    };
+    wrapWithPasswordCheck(action, 'Unlock cycle');
+  }
+
+  function updateCycleSettings() {
+    if (cycleLocked) {
+      setNotice({ type: "error", text: "Cannot change settings while cycle is locked." });
+      return;
+    }
+    const action = () => {
+      const adultCount = getAdultCount();
+      const payoutBalance = calculatePayoutBalance(adultCount, cycleFrequency);
+      const cycle = {
+        startDate: cycleStartDate,
+        frequencyMonths: cycleFrequency,
+        adultCountAtStart: adultCount,
+        payoutBalance: payoutBalance,
+        isLocked: false,
+        currentPayoutIndex: 0
+      };
+      persist({ ...data, cycle });
+      setNotice({ type: "warning", text: `Cycle settings updated. Payout balance: ${fmt(payoutBalance)}` });
+    };
+    wrapWithPasswordCheck(action, 'Update cycle settings');
   }
 
   // ============================================
@@ -1351,12 +1544,16 @@ The user can then re-enable password protection with a new password.
               <p style={styles.statValue}>{fmt(totals.totalCollected)}</p>
             </div>
             <div style={styles.statCard}>
-              <p style={styles.statLabel}>Pot balance (payouts)</p>
+              <p style={styles.statLabel}>Pot Balance</p>
               <p style={styles.statValue}>{fmt(totals.potBalance)}</p>
             </div>
             <div style={styles.statCardAccent}>
-              <p style={styles.statLabelAccent}>Emergency fund balance</p>
-              <p style={styles.statValueAccent}>{fmt(totals.efBalance)}</p>
+              <p style={styles.statLabelAccent}>Payout Balance (Cycle Fixed)</p>
+              <p style={styles.statValueAccent}>{fmt(data.cycle?.payoutBalance || 0)}</p>
+            </div>
+            <div style={styles.statCard}>
+              <p style={styles.statLabel}>Emergency fund balance</p>
+              <p style={styles.statValue}>{fmt(totals.efBalance)}</p>
             </div>
           </div>
         </div>
@@ -1407,7 +1604,6 @@ The user can then re-enable password protection with a new password.
               </div>
             )}
 
-            {/* Legend - only visible to treasurers */}
             {!isViewOnly && (
               <div style={{ display: "flex", gap: 20, marginBottom: 16, flexWrap: "wrap", fontSize: 13, background: "#f5f0e6", padding: "8px 14px", borderRadius: 8 }}>
                 <span><span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: "#2E7D32", marginRight: 4 }}></span> Current (paid this month)</span>
@@ -1428,7 +1624,6 @@ The user can then re-enable password protection with a new password.
                     <th style={styles.th}>Contributed</th>
                     <th style={styles.th}>Received</th>
                     <th style={styles.th}>EF Balance</th>
-                    {/* Status and Prepaid only for treasurers */}
                     {!isViewOnly && <th style={styles.th}>Status</th>}
                     {!isViewOnly && <th style={styles.th}>Prepaid</th>}
                     {!isViewOnly && <th style={styles.th}>Recorded By</th>}
@@ -1443,15 +1638,14 @@ The user can then re-enable password protection with a new password.
                       <tr key={m.id}>
                         <td style={styles.td} data-label="Member">
                           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {/* Show status dot only for adults and only for treasurers */}
                             {!isViewOnly && isAdult && (
-                              <span style={{ 
-                                display: 'inline-block', 
-                                width: 10, 
-                                height: 10, 
-                                borderRadius: '50%', 
-                                background: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'), 
-                                flexShrink: 0 
+                              <span style={{
+                                display: 'inline-block',
+                                width: 10,
+                                height: 10,
+                                borderRadius: '50%',
+                                background: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'),
+                                flexShrink: 0
                               }}></span>
                             )}
                             {displayName}
@@ -1462,7 +1656,7 @@ The user can then re-enable password protection with a new password.
                         <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
                         <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
                         <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
-                        
+
                         {!isViewOnly && (
                           <>
                             <td style={styles.td} data-label="Status">
@@ -1537,7 +1731,7 @@ The user can then re-enable password protection with a new password.
                     <tr key={c.id}>
                       <td style={styles.td} data-label="Month">{monthLabel(c.month)}</td>
                       <td style={styles.td} data-label="Member">{memberById[c.memberId]?.name || "Removed member"}</td>
-                      <td style={styles.td} data-label="Type">{c.memberType === 'child' ? 'Child' : 'Adult'}</td>
+                      <td style={styles.td} data-label="Type">{c.memberType === 'child' ? 'Child' : 'Adult'}{c.type === 'catchup' ? ' (Catch-up)' : ''}</td>
                       <td style={styles.td} data-label="Amount">{fmt(c.amount)}</td>
                       <td style={styles.td} data-label="To pot">{fmt(c.potShare || 0)}</td>
                       <td style={styles.td} data-label="To fund">{fmt(c.efShare || 0)}</td>
@@ -1567,10 +1761,27 @@ The user can then re-enable password protection with a new password.
                 ))}
               </select>
               <input style={styles.input} type="month" value={pMonth} onChange={(e) => setPMonth(e.target.value)} />
-              <input style={styles.input} type="number" min="0.01" step="0.01" placeholder="Amount" value={pAmount} onChange={(e) => setPAmount(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }} />
-              <button style={styles.btnPrimary} type="button" onClick={addPayout}>Record payout</button>
+              <input
+                style={styles.input}
+                type="number"
+                min="0.01"
+                step="0.01"
+                placeholder="Amount"
+                value={pAmount}
+                onChange={(e) => setPAmount(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }}
+              />
+              <button style={styles.btnPrimary} type="button" onClick={() => {
+                // Pre-fill with payout balance if amount is empty
+                if (!pAmount && data.cycle?.payoutBalance) {
+                  setPAmount(data.cycle.payoutBalance.toFixed(2));
+                } else {
+                  addPayout();
+                }
+              }}>Record payout</button>
             </div>
             <p style={styles.hint}>Pot balance available: {fmt(totals.potBalance)}</p>
+            <p style={styles.hint}>Payout balance (fixed): {fmt(data.cycle?.payoutBalance || 0)}</p>
             {data.payouts.length === 0 ? (
               <p style={styles.empty}>No payouts recorded yet.</p>
             ) : (
@@ -1865,130 +2076,193 @@ The user can then re-enable password protection with a new password.
           <section>
             <h3 style={{ marginBottom: 12 }}>App Settings</h3>
 
-            <>
-              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-                  <label style={{ fontWeight: 600 }}>Password Protection</label>
-                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
-                    When enabled, all write actions (add, remove, transfer, repay) will require a password.
-                    You only need to enter it once per browser session.
-                  </p>
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={passwordToggle}
-                      onChange={(e) => {
-                        setPasswordToggle(e.target.checked);
-                        if (!e.target.checked) {
-                          const settings = { requirePassword: false, password: '' };
-                          persist({ ...data, settings });
-                          setNewPassword("");
-                          setNotice({ type: "warning", text: "Password protection disabled." });
-                          sessionStorage.removeItem('susu_password_authorized');
-                          setSessionAuthorized(false);
-                          setSettingsAccessGranted(false);
-                        }
-                      }}
-                    />
-                    Require password for changes
-                  </label>
-                </div>
-              </div>
-
-              {passwordToggle && (
-                <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
+            {/* Cycle Settings */}
+            <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+              <h4 style={{ margin: "0 0 8px 0", width: "100%" }}>Cycle Settings</h4>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 12, width: "100%" }}>
+                <div style={{ flex: "1 1 200px" }}>
+                  <label style={{ fontSize: 12, color: "#5F5E5A", display: "block", marginBottom: 2 }}>Cycle Start Date</label>
                   <input
                     style={styles.input}
-                    type={showPasswordText ? "text" : "password"}
-                    placeholder="Set new password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
+                    type="date"
+                    value={cycleStartDate}
+                    onChange={(e) => setCycleStartDate(e.target.value)}
+                    disabled={cycleLocked}
                   />
-                  <button style={styles.btnPrimary} onClick={() => {
-                    if (!newPassword.trim()) {
-                      setNotice({ type: "error", text: "Please enter a password." });
-                      return;
-                    }
-                    const settings = { requirePassword: true, password: newPassword.trim() };
-                    persist({ ...data, settings });
-                    setPasswordToggle(true);
-                    setNotice({ type: "warning", text: `Password protection enabled.` });
-                  }}>Set Password</button>
-                  {data.settings?.password && (
-                    <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
-                      Current password:
-                      <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
-                        {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
-                      </span>
-                      <button
-                        style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
-                        onClick={() => setShowPasswordText(!showPasswordText)}
-                      >
-                        {showPasswordText ? 'Hide' : 'Show'}
-                      </button>
+                </div>
+                <div style={{ flex: "1 1 180px" }}>
+                  <label style={{ fontSize: 12, color: "#5F5E5A", display: "block", marginBottom: 2 }}>Payout Frequency</label>
+                  <select
+                    style={styles.input}
+                    value={cycleFrequency}
+                    onChange={(e) => setCycleFrequency(parseInt(e.target.value))}
+                    disabled={cycleLocked}
+                  >
+                    <option value={1}>Monthly</option>
+                    <option value={2}>Every 2 months</option>
+                  </select>
+                </div>
+                <div style={{ flex: "1 1 150px" }}>
+                  <label style={{ fontSize: 12, color: "#5F5E5A", display: "block", marginBottom: 2 }}>Adult Count</label>
+                  <input
+                    style={{ ...styles.input, background: "#e8e3d8" }}
+                    type="number"
+                    value={getAdultCount()}
+                    readOnly
+                    disabled
+                  />
+                </div>
+                <div style={{ flex: "1 1 150px" }}>
+                  <label style={{ fontSize: 12, color: "#5F5E5A", display: "block", marginBottom: 2 }}>Payout Balance</label>
+                  <input
+                    style={{ ...styles.input, background: "#e8e3d8", fontWeight: 600 }}
+                    type="text"
+                    value={fmt(calculatePayoutBalance(getAdultCount(), cycleFrequency))}
+                    readOnly
+                    disabled
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                {!cycleLocked ? (
+                  <>
+                    <button style={styles.btnPrimary} onClick={updateCycleSettings}>Update Cycle Settings</button>
+                    <button style={{ ...styles.btnPrimary, background: "#C9962B" }} onClick={lockCycle}>Lock Cycle</button>
+                  </>
+                ) : (
+                  <button style={{ ...styles.btnGhostSmall, color: "#9C4A2E" }} onClick={unlockCycle}>Unlock Cycle</button>
+                )}
+                <span style={{ alignSelf: "center", fontSize: 13, color: cycleLocked ? "#2E7D32" : "#F9A825", fontWeight: 600 }}>
+                  {cycleLocked ? "🔒 Locked" : "🔓 Unlocked"}
+                </span>
+              </div>
+            </div>
+
+            {/* Password Protection */}
+            <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
+                <label style={{ fontWeight: 600 }}>Password Protection</label>
+                <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
+                  When enabled, all write actions (add, remove, transfer, repay) will require a password.
+                  You only need to enter it once per browser session.
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={passwordToggle}
+                    onChange={(e) => {
+                      setPasswordToggle(e.target.checked);
+                      if (!e.target.checked) {
+                        const settings = { requirePassword: false, password: '' };
+                        persist({ ...data, settings });
+                        setNewPassword("");
+                        setNotice({ type: "warning", text: "Password protection disabled." });
+                        sessionStorage.removeItem('susu_password_authorized');
+                        setSessionAuthorized(false);
+                        setSettingsAccessGranted(false);
+                      }
+                    }}
+                  />
+                  Require password for changes
+                </label>
+              </div>
+            </div>
+
+            {passwordToggle && (
+              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8 }}>
+                <input
+                  style={styles.input}
+                  type={showPasswordText ? "text" : "password"}
+                  placeholder="Set new password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+                <button style={styles.btnPrimary} onClick={() => {
+                  if (!newPassword.trim()) {
+                    setNotice({ type: "error", text: "Please enter a password." });
+                    return;
+                  }
+                  const settings = { requirePassword: true, password: newPassword.trim() };
+                  persist({ ...data, settings });
+                  setPasswordToggle(true);
+                  setNotice({ type: "warning", text: `Password protection enabled.` });
+                }}>Set Password</button>
+                {data.settings?.password && (
+                  <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
+                    Current password:
+                    <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
+                      {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
                     </span>
-                  )}
-                </div>
-              )}
-
-              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontWeight: 600 }}>View-Only Link</label>
-                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                    Share this link with members who should only view data, not make changes:
-                  </p>
-                  <code style={{
-                    display: "block",
-                    background: "#123B22",
-                    color: "#F3D48A",
-                    padding: "10px",
-                    borderRadius: 6,
-                    fontSize: 13,
-                    wordBreak: "break-all",
-                    marginTop: 8
-                  }}>
-                    {window.location.origin}{window.location.pathname}?mode=view
-                  </code>
-                  <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?mode=view`);
-                    setNotice({ type: "warning", text: "View-only link copied to clipboard!" });
-                  }}>Copy Link</button>
-                </div>
+                    <button
+                      style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
+                      onClick={() => setShowPasswordText(!showPasswordText)}
+                    >
+                      {showPasswordText ? 'Hide' : 'Show'}
+                    </button>
+                  </span>
+                )}
               </div>
+            )}
 
-              <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
-                  <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                    Share this link with treasurers who need to make changes:
-                  </p>
-                  <code style={{
-                    display: "block",
-                    background: "#123B22",
-                    color: "#F3D48A",
-                    padding: "10px",
-                    borderRadius: 6,
-                    fontSize: 13,
-                    wordBreak: "break-all",
-                    marginTop: 8
-                  }}>
-                    {window.location.origin}{window.location.pathname}
-                  </code>
-                  <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
-                    setNotice({ type: "warning", text: "Edit link copied to clipboard!" });
-                  }}>Copy Link</button>
-                </div>
+            {/* View-Only Link */}
+            <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontWeight: 600 }}>View-Only Link</label>
+                <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                  Share this link with members who should only view data, not make changes:
+                </p>
+                <code style={{
+                  display: "block",
+                  background: "#123B22",
+                  color: "#F3D48A",
+                  padding: "10px",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  wordBreak: "break-all",
+                  marginTop: 8
+                }}>
+                  {window.location.origin}{window.location.pathname}?mode=view
+                </code>
+                <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?mode=view`);
+                  setNotice({ type: "warning", text: "View-only link copied to clipboard!" });
+                }}>Copy Link</button>
               </div>
+            </div>
 
-              {sessionAuthorized && (
-                <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
-                  <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
-                </div>
-              )}
-            </>
+            {/* Edit Link */}
+            <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginTop: 16 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
+                <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
+                  Share this link with treasurers who need to make changes:
+                </p>
+                <code style={{
+                  display: "block",
+                  background: "#123B22",
+                  color: "#F3D48A",
+                  padding: "10px",
+                  borderRadius: 6,
+                  fontSize: 13,
+                  wordBreak: "break-all",
+                  marginTop: 8
+                }}>
+                  {window.location.origin}{window.location.pathname}
+                </code>
+                <button style={{ ...styles.btnGhostSmall, marginTop: 8 }} onClick={() => {
+                  navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}`);
+                  setNotice({ type: "warning", text: "Edit link copied to clipboard!" });
+                }}>Copy Link</button>
+              </div>
+            </div>
+
+            {sessionAuthorized && (
+              <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
+                <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
+              </div>
+            )}
           </section>
         )}
       </main>
