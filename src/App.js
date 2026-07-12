@@ -138,7 +138,8 @@ const emptyData = {
   removedLog: [],
   settings: {
     requirePassword: false,
-    password: ''
+    password: '',
+    appPassword: '' // NEW: global app password
   },
   cycle: {
     startDate: DEFAULT_CYCLE_START,
@@ -168,7 +169,21 @@ export default function SusuTracker() {
   const lastKnownUpdatedAt = React.useRef(null);
   const lastKnownVersion = React.useRef(0);
 
-  // ----- Password state -----
+  // ----- App Unlock state -----
+  const [appUnlocked, setAppUnlocked] = useState(() => {
+    return sessionStorage.getItem('susu_app_unlocked') === 'true';
+  });
+  const [appPasswordInput, setAppPasswordInput] = useState("");
+  const [appPasswordError, setAppPasswordError] = useState("");
+  const [showAppForgotPassword, setShowAppForgotPassword] = useState(false);
+
+  // ----- View-only mode -----
+  const isViewOnly = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('mode') === 'view';
+  }, []);
+
+  // ----- Password state (edit actions) -----
   const [passwordInput, setPasswordInput] = useState("");
   const [pendingAction, setPendingAction] = useState(null);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -193,12 +208,6 @@ export default function SusuTracker() {
   const [cycleStartDate, setCycleStartDate] = useState(DEFAULT_CYCLE_START);
   const [cycleFrequency, setCycleFrequency] = useState(1);
   const [cycleLocked, setCycleLocked] = useState(false);
-
-  // ----- View-only mode -----
-  const isViewOnly = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('mode') === 'view';
-  }, []);
 
   // ----- Chat state -----
   const [chatMessages, setChatMessages] = useState([]);
@@ -239,12 +248,13 @@ export default function SusuTracker() {
   // ----- Password settings state -----
   const [newPassword, setNewPassword] = useState("");
   const [passwordToggle, setPasswordToggle] = useState(false);
+  const [newAppPassword, setNewAppPassword] = useState("");
 
   // ============================================
   // CHAT LOGIC
   // ============================================
   useEffect(() => {
-    if (!isViewOnly) {
+    if (!isViewOnly && appUnlocked) {
       loadChatMessages();
       subscribeToChat();
     }
@@ -253,7 +263,7 @@ export default function SusuTracker() {
         chatSubscriptionRef.current.unsubscribe();
       }
     };
-  }, [isViewOnly]);
+  }, [isViewOnly, appUnlocked]);
 
   async function loadChatMessages() {
     try {
@@ -341,7 +351,10 @@ export default function SusuTracker() {
       if (result && result.value) {
         const parsed = result.value;
         if (!parsed.settings) {
-          parsed.settings = { requirePassword: false, password: '' };
+          parsed.settings = { requirePassword: false, password: '', appPassword: '' };
+        }
+        if (!parsed.settings.appPassword) {
+          parsed.settings.appPassword = '';
         }
         if (!parsed.transfers) {
           parsed.transfers = [];
@@ -367,7 +380,6 @@ export default function SusuTracker() {
           lastKnownUpdatedAt.current = remoteUpdatedAt;
           lastKnownVersion.current = parsed.version || 0;
           setPasswordToggle(parsed.settings?.requirePassword || false);
-          // Sync cycle UI state
           if (parsed.cycle) {
             setCycleStartDate(parsed.cycle.startDate || DEFAULT_CYCLE_START);
             setCycleFrequency(parsed.cycle.frequencyMonths || 1);
@@ -429,7 +441,35 @@ export default function SusuTracker() {
   }
 
   // ============================================
-  // PASSWORD CHECK
+  // APP UNLOCK LOGIC
+  // ============================================
+  function handleAppUnlock() {
+    const storedPassword = data.settings?.appPassword || '';
+    if (!storedPassword) {
+      // No app password set — allow access
+      setAppUnlocked(true);
+      sessionStorage.setItem('susu_app_unlocked', 'true');
+      setAppPasswordError("");
+      setAppPasswordInput("");
+      return;
+    }
+    if (appPasswordInput === storedPassword) {
+      setAppUnlocked(true);
+      sessionStorage.setItem('susu_app_unlocked', 'true');
+      setAppPasswordError("");
+      setAppPasswordInput("");
+    } else {
+      setAppPasswordError("Incorrect password. Please try again.");
+      setAppPasswordInput("");
+    }
+  }
+
+  function handleAppForgotPassword() {
+    setShowAppForgotPassword(true);
+  }
+
+  // ============================================
+  // PASSWORD CHECK (edit actions)
   // ============================================
   function requiresPasswordCheck() {
     return data.settings?.requirePassword === true;
@@ -730,7 +770,7 @@ export default function SusuTracker() {
   }, [data.efWithdrawals, data.efRepayments]);
 
   // ============================================
-  // ALL TRANSACTIONS (with justification)
+  // ALL TRANSACTIONS
   // ============================================
   const allTransactions = useMemo(() => {
     const rows = [];
@@ -880,7 +920,7 @@ export default function SusuTracker() {
   }, [allTransactions, txType, txSearch, txFrom, txTo]);
 
   // ============================================
-  // ACTIONS (with justification support)
+  // ACTIONS
   // ============================================
   function requireName() {
     setEditingName(true);
@@ -904,7 +944,6 @@ export default function SusuTracker() {
       let catchupMonths = 0;
       let catchupContribution = null;
 
-      // Calculate catch-up if adult and cycle is locked
       if (isAdult && data.cycle && data.cycle.isLocked) {
         const joinDate = new Date().toISOString().slice(0, 10);
         catchupMonths = monthsBetween(data.cycle.startDate, joinDate);
@@ -914,7 +953,7 @@ export default function SusuTracker() {
           const efShare = Math.round((catchupAmount - potShare) * 100) / 100;
           catchupContribution = {
             id: uid(),
-            memberId: null, // will be set after member is created
+            memberId: null,
             memberType: 'adult',
             month: getCurrentMonthEastern(),
             amount: catchupAmount,
@@ -927,7 +966,6 @@ export default function SusuTracker() {
         }
       }
 
-      // Create member
       const newMember = {
         id: uid(),
         name,
@@ -944,16 +982,12 @@ export default function SusuTracker() {
         members: [...data.members, newMember],
       };
 
-      // Add catch-up contribution if applicable
       if (catchupContribution) {
         catchupContribution.memberId = newMember.id;
         nextData.contributions = [...nextData.contributions, catchupContribution];
       }
 
-      // Add to end of payout order if adult and cycle locked
       if (isAdult && data.cycle && data.cycle.isLocked) {
-        // The member is already added at the end via order
-        // We'll update the nextOverrideId to point to the first member in order if not set
         if (!nextData.nextOverrideId) {
           const orderedMembers = [...nextData.members].sort((a, b) => a.order - b.order);
           if (orderedMembers.length > 0) {
@@ -1242,7 +1276,8 @@ export default function SusuTracker() {
     const action = () => {
       const settings = {
         requirePassword: passwordToggle,
-        password: passwordToggle ? newPassword : ''
+        password: passwordToggle ? newPassword : '',
+        appPassword: data.settings?.appPassword || ''
       };
       persist({ ...data, settings });
       setNotice({ type: "warning", text: passwordToggle ? `Password protection enabled.` : "Password protection disabled." });
@@ -1253,6 +1288,19 @@ export default function SusuTracker() {
       }
     };
     wrapWithPasswordCheck(action, 'Update password settings');
+  }
+
+  function updateAppPassword() {
+    const action = () => {
+      const settings = {
+        ...data.settings,
+        appPassword: newAppPassword.trim()
+      };
+      persist({ ...data, settings });
+      setNotice({ type: "warning", text: `App password updated.` });
+      setNewAppPassword("");
+    };
+    wrapWithPasswordCheck(action, 'Update app password');
   }
 
   function removeTransaction(entry) {
@@ -1311,7 +1359,6 @@ export default function SusuTracker() {
   }
 
   function unlockCycle() {
-    // Only allow if no payouts have been made in this cycle
     const payoutsInCycle = data.payouts.filter(p => {
       const payoutDate = new Date(p.date);
       const cycleStart = new Date(data.cycle?.startDate || DEFAULT_CYCLE_START);
@@ -1391,6 +1438,67 @@ The user can then re-enable password protection with a new password.
       <div style={styles.loadingWrap}>
         <style>{globalCss}</style>
         <p style={{ fontFamily: "var(--body)", color: "#EDE6D3" }}>Loading your susu circle...</p>
+      </div>
+    );
+  }
+
+  // If NOT view-only AND NOT unlocked, show the password overlay
+  if (!isViewOnly && !appUnlocked) {
+    return (
+      <div style={{ ...styles.app, position: "relative", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#123B22" }}>
+        <style>{globalCss}</style>
+        <div style={styles.appUnlockModal}>
+          <h2 style={{ color: "#FBF4E4", marginTop: 0, textAlign: "center" }}>🔒 Brundige Family Trust</h2>
+          <p style={{ color: "#A9C9AE", textAlign: "center", marginBottom: 20 }}>Enter the app password to access the dashboard.</p>
+          {appPasswordError && (
+            <p style={{ color: "#f44336", fontSize: 13, textAlign: "center" }}>{appPasswordError}</p>
+          )}
+          <input
+            type="password"
+            style={{ ...styles.input, width: "100%", marginBottom: 12 }}
+            placeholder="Enter app password"
+            value={appPasswordInput}
+            onChange={(e) => setAppPasswordInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleAppUnlock(); }}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <button style={styles.btnPrimary} onClick={handleAppUnlock}>Unlock</button>
+            <button style={{ ...styles.btnGhostSmall, color: "#F3D48A", borderColor: "#4C8C5D" }} onClick={handleAppForgotPassword}>Forgot Password?</button>
+          </div>
+        </div>
+
+        {showAppForgotPassword && (
+          <div style={styles.modalOverlay}>
+            <div style={{ ...styles.modal, maxWidth: "600px" }}>
+              <h3 style={{ marginTop: 0 }}>🔑 Forgot App Password?</h3>
+              <p style={{ fontSize: 14, color: "#5F5E5A", marginBottom: 12 }}>
+                Forward this message to the <strong>Compliance Officer &amp; Technology Officer</strong> to reset the app password via Supabase:
+              </p>
+              <div style={{
+                background: "#f5f0e6",
+                padding: "14px",
+                borderRadius: 8,
+                fontSize: 13,
+                fontFamily: "monospace",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                maxHeight: "300px",
+                overflow: "auto",
+                border: "1px solid #E4DBC4"
+              }}>
+                {forgotPasswordMessage}
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+                <button style={styles.btnPrimary} onClick={() => {
+                  navigator.clipboard.writeText(forgotPasswordMessage);
+                  setNotice({ type: "warning", text: "Message copied to clipboard!" });
+                }}>📋 Copy Message</button>
+                <button style={styles.btnGhostSmall} onClick={() => { setShowAppForgotPassword(false); }}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1772,7 +1880,6 @@ The user can then re-enable password protection with a new password.
                 onKeyDown={(e) => { if (e.key === "Enter") addPayout(); }}
               />
               <button style={styles.btnPrimary} type="button" onClick={() => {
-                // Pre-fill with payout balance if amount is empty
                 if (!pAmount && data.cycle?.payoutBalance) {
                   setPAmount(data.cycle.payoutBalance.toFixed(2));
                 } else {
@@ -2138,10 +2245,39 @@ The user can then re-enable password protection with a new password.
               </div>
             </div>
 
-            {/* Password Protection */}
+            {/* App Password (global) */}
+            <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
+              <h4 style={{ margin: "0 0 8px 0", width: "100%" }}>App Password (Global Access)</h4>
+              <p style={{ fontSize: 13, color: "#5F5E5A", margin: "0 0 8px 0", width: "100%" }}>
+                This password is required to access the app at all. Members using <code>?mode=view</code> bypass this.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, width: "100%" }}>
+                <input
+                  style={{ ...styles.input, flex: "1 1 200px" }}
+                  type={showPasswordText ? "text" : "password"}
+                  placeholder="Set app password"
+                  value={newAppPassword}
+                  onChange={(e) => setNewAppPassword(e.target.value)}
+                />
+                <button style={styles.btnPrimary} onClick={updateAppPassword}>Set App Password</button>
+                <button
+                  style={{ ...styles.btnGhostSmall, padding: "2px 8px", fontSize: 11 }}
+                  onClick={() => setShowPasswordText(!showPasswordText)}
+                >
+                  {showPasswordText ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {data.settings?.appPassword && (
+                <span style={{ fontSize: 12, color: "#2E7D32", marginTop: 4 }}>
+                  ✅ App password is set. Current: <strong>{'•'.repeat(data.settings.appPassword.length)}</strong>
+                </span>
+              )}
+            </div>
+
+            {/* Edit Password Protection */}
             <div style={{ ...styles.formGrid, background: "#f5f0e6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1 }}>
-                <label style={{ fontWeight: 600 }}>Password Protection</label>
+                <label style={{ fontWeight: 600 }}>Edit Password Protection</label>
                 <p style={{ fontSize: 13, color: "#5F5E5A", margin: 0 }}>
                   When enabled, all write actions (add, remove, transfer, repay) will require a password.
                   You only need to enter it once per browser session.
@@ -2155,17 +2291,17 @@ The user can then re-enable password protection with a new password.
                     onChange={(e) => {
                       setPasswordToggle(e.target.checked);
                       if (!e.target.checked) {
-                        const settings = { requirePassword: false, password: '' };
+                        const settings = { ...data.settings, requirePassword: false, password: '' };
                         persist({ ...data, settings });
                         setNewPassword("");
-                        setNotice({ type: "warning", text: "Password protection disabled." });
+                        setNotice({ type: "warning", text: "Edit password protection disabled." });
                         sessionStorage.removeItem('susu_password_authorized');
                         setSessionAuthorized(false);
                         setSettingsAccessGranted(false);
                       }
                     }}
                   />
-                  Require password for changes
+                  Require password for edits
                 </label>
               </div>
             </div>
@@ -2175,7 +2311,7 @@ The user can then re-enable password protection with a new password.
                 <input
                   style={styles.input}
                   type={showPasswordText ? "text" : "password"}
-                  placeholder="Set new password"
+                  placeholder="Set edit password"
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                 />
@@ -2184,14 +2320,14 @@ The user can then re-enable password protection with a new password.
                     setNotice({ type: "error", text: "Please enter a password." });
                     return;
                   }
-                  const settings = { requirePassword: true, password: newPassword.trim() };
+                  const settings = { ...data.settings, requirePassword: true, password: newPassword.trim() };
                   persist({ ...data, settings });
                   setPasswordToggle(true);
-                  setNotice({ type: "warning", text: `Password protection enabled.` });
-                }}>Set Password</button>
+                  setNotice({ type: "warning", text: `Edit password protection enabled.` });
+                }}>Set Edit Password</button>
                 {data.settings?.password && (
                   <span style={{ alignSelf: "center", fontSize: 12, color: "#5F5E5A", display: "flex", alignItems: "center", gap: 6 }}>
-                    Current password:
+                    Current edit password:
                     <span style={{ fontFamily: "monospace", background: "#f0ebe0", padding: "2px 8px", borderRadius: 4 }}>
                       {showPasswordText ? data.settings.password : '•'.repeat(data.settings.password.length)}
                     </span>
@@ -2211,7 +2347,7 @@ The user can then re-enable password protection with a new password.
               <div style={{ flex: 1 }}>
                 <label style={{ fontWeight: 600 }}>View-Only Link</label>
                 <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                  Share this link with members who should only view data, not make changes:
+                  Share this link with members who should only view data, not make changes. No password required.
                 </p>
                 <code style={{
                   display: "block",
@@ -2237,7 +2373,7 @@ The user can then re-enable password protection with a new password.
               <div style={{ flex: 1 }}>
                 <label style={{ fontWeight: 600 }}>Edit Link (Treasurers Only)</label>
                 <p style={{ fontSize: 13, color: "#5F5E5A", margin: "4px 0" }}>
-                  Share this link with treasurers who need to make changes:
+                  Share this link with treasurers who need to make changes. Requires app password to access.
                 </p>
                 <code style={{
                   display: "block",
@@ -2260,7 +2396,7 @@ The user can then re-enable password protection with a new password.
 
             {sessionAuthorized && (
               <div style={{ ...styles.formGrid, background: "#e8f0e8", padding: 12, borderRadius: 8, marginTop: 16 }}>
-                <span style={{ fontSize: 13 }}>✅ Password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
+                <span style={{ fontSize: 13 }}>✅ Edit password authorized for this session. You won't be prompted again until you refresh the page or clear your browser data.</span>
               </div>
             )}
           </section>
@@ -2616,4 +2752,4 @@ styleSheet.textContent = `
     to { opacity: 1; transform: translateY(0); }
   }
 `;
-document.head.appendChild(styleSheet);
+document.head.appendChild(styleSheet);  
