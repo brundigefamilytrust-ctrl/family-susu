@@ -1,5 +1,35 @@
 /* eslint-disable */
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+  // import React, { useEffect, useRef } from 'react';
+
+  const isFetching = useRef(false);
+
+  async function loadShared() {
+    // GUARD CLAUSE: If a fetch is currently running, STOP and try again later
+    if (isFetching.current) return;
+    
+    isFetching.current = true;
+    try {
+      const { data: result, error } = await supabase
+        .from('app_state')
+        .select('value')
+        .eq('key', 'susu_data')
+        .single();
+      
+      // ... the rest of your code that uses 'result' goes here ...
+
+    } catch (error) {
+      console.error(error);
+    } finally {
+      // Once done, lift the traffic guard so the next fetch can happen
+      isFetching.current = false;
+    }
+  }
+
+  // This timer now safely runs every 10 seconds, but the guard prevents overlaps
+  useEffect(() => {
+    const interval = setInterval(loadShared, 10000);
+    return () => clearInterval(interval);
+  }, []);
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
