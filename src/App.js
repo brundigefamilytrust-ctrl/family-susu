@@ -1,5 +1,5 @@
 /* eslint-disable */
-  // import React, { useEffect, useRef } from 'react';
+  import React, { useEffect, useRef } from 'react';
 
   const isFetching = useRef(false);
 
@@ -14,8 +14,8 @@
         .select('value')
         .eq('key', 'susu_data')
         .single();
-      
-      // ... the rest of your code that uses 'result' goes here ...
+
+      setAppData(result.value))
 
     } catch (error) {
       console.error(error);
