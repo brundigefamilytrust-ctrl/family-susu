@@ -1,35 +1,5 @@
 /* eslint-disable */
-  import React, { useEffect, useRef } from 'react';
-
-  const isFetching = useRef(false);
-
-  async function loadShared() {
-    // GUARD CLAUSE: If a fetch is currently running, STOP and try again later
-    if (isFetching.current) return;
-    
-    isFetching.current = true;
-    try {
-      const { data: result, error } = await supabase
-        .from('app_state')
-        .select('value')
-        .eq('key', 'susu_data')
-        .single();
-
-      setAppData(result.value))
-
-    } catch (error) {
-      console.error(error);
-    } finally {
-      // Once done, lift the traffic guard so the next fetch can happen
-      isFetching.current = false;
-    }
-  }
-
-  // This timer now safely runs every 10 seconds, but the guard prevents overlaps
-  useEffect(() => {
-    const interval = setInterval(loadShared, 10000);
-    return () => clearInterval(interval);
-  }, []);
+import React, { useEffect, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
@@ -198,6 +168,7 @@ export default function SusuTracker() {
   const nameInputRef = React.useRef(null);
   const lastKnownUpdatedAt = React.useRef(null);
   const lastKnownVersion = React.useRef(0);
+  const isFetching = useRef(false); // <--- Guard added to stop API flooding
 
   // ----- App Unlock state -----
   const [appUnlocked, setAppUnlocked] = useState(() => {
@@ -361,7 +332,7 @@ export default function SusuTracker() {
   }
 
   // ============================================
-  // SUPABASE SYNC
+  // SUPABASE SYNC (Fixed with Guard against flooding)
   // ============================================
   useEffect(() => {
     loadShared();
@@ -370,6 +341,10 @@ export default function SusuTracker() {
   }, []);
 
   async function loadShared() {
+    // GUARD CLAUSE: Prevent overlapping requests
+    if (isFetching.current) return;
+    isFetching.current = true;
+
     try {
       const { data: result, error } = await supabase
         .from('app_state')
@@ -421,6 +396,7 @@ export default function SusuTracker() {
     } catch (e) {
       console.log('Loading error:', e);
     } finally {
+      isFetching.current = false;
       setLoaded(true);
     }
   }
@@ -2782,4 +2758,4 @@ styleSheet.textContent = `
     to { opacity: 1; transform: translateY(0); }
   }
 `;
-document.head.appendChild(styleSheet);  
+document.head.appendChild(styleSheet);
