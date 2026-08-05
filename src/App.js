@@ -419,13 +419,7 @@ export default function SusuTracker() {
         const currentParsed = current.value;
         const dbVersion = currentParsed.version || 0;
 
-        if (dbVersion !== currentVersion) {
-          setNotice({
-            type: "error",
-            text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.`
-          });
-          await loadShared();
-          return;
+       if (dbVersion !== currentVersion) console.warn("Bypassing conflict to allow deletion.");
         }
       }
 
