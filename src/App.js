@@ -169,7 +169,7 @@ export default function SusuTracker() {
   const lastKnownUpdatedAt = React.useRef(null);
   const lastKnownVersion = React.useRef(0);
   const isFetching = useRef(false); // <--- Guard added to stop API flooding
-
+  const intervalRef = useRef(null);
   // ----- App Unlock state -----
   const [appUnlocked, setAppUnlocked] = useState(() => {
     return sessionStorage.getItem('susu_app_unlocked') === 'true';
@@ -334,10 +334,10 @@ export default function SusuTracker() {
   // ============================================
   // SUPABASE SYNC (Fixed with Guard against flooding)
   // ============================================
-  useEffect(() => {
+    useEffect(() => {
     loadShared();
-    const interval = setInterval(loadShared, 10000);
-    return () => clearInterval(interval);
+    intervalRef.current = setInterval(loadShared, 10000);
+    return () => clearInterval(intervalRef.current);
   }, []);
 
   async function loadShared() {
@@ -402,6 +402,7 @@ export default function SusuTracker() {
   }
 
   async function persist(nextRaw) {
+    if (intervalRef.current) clearInterval(intervalRef.current);
     const currentVersion = lastKnownVersion.current;
     const nextVersion = (nextRaw.version || 0) + 1;
     const next = { ...nextRaw, version: nextVersion, updatedAt: new Date().toISOString() };
@@ -437,7 +438,11 @@ export default function SusuTracker() {
     } catch (e) {
       console.log('Save error:', e);
       setNotice({ type: "error", text: "Could not save. Please try again." });
-    }
+    } } finally {
+    // RESTART THE 10-SECOND TIMER NOW THAT THE SAVE IS FINISHED
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(loadShared, 10000);
+    I }
   }
 
   // ============================================
