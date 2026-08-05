@@ -164,12 +164,17 @@ export default function SusuTracker() {
   const [syncedAt, setSyncedAt] = useState(null);
   const [recorderName, setRecorderName] = useState("");
   const [nameDraft, setNameDraft] = useState("");
-  const [editingName, setEditingName] = useState(true);
-  const nameInputRef = React.useRef(null);
-  const lastKnownUpdatedAt = React.useRef(null);
-  const lastKnownVersion = React.useRef(0);
-  const isFetching = useRef(false); // <--- Guard added to stop API flooding
-  const intervalRef = useRef(null);
+  const [editingName, setEditingName] = useState(false);
+  const nameInputRef = useRef(null);
+  const lastKnownUpdatedAt = useRef(null);
+  const lastKnownVersion = useRef(0);
+  const isFetching = useRef(false);
+  const intervalRef = useRef(null); // <--- Controls the 10-second timer
+
+  // ----- NEW STATES FOR YOUR FEATURES -----
+  const [memberFilter, setMemberFilter] = useState("all");
+  const [showNameWarningModal, setShowNameWarningModal] = useState(false);
+
   // ----- App Unlock state -----
   const [appUnlocked, setAppUnlocked] = useState(() => {
     return sessionStorage.getItem('susu_app_unlocked') === 'true';
@@ -334,14 +339,13 @@ export default function SusuTracker() {
   // ============================================
   // SUPABASE SYNC (Fixed with Guard against flooding)
   // ============================================
-    useEffect(() => {
+  useEffect(() => {
     loadShared();
     intervalRef.current = setInterval(loadShared, 10000);
     return () => clearInterval(intervalRef.current);
   }, []);
 
   async function loadShared() {
-    // GUARD CLAUSE: Prevent overlapping requests
     if (isFetching.current) return;
     isFetching.current = true;
 
@@ -402,7 +406,9 @@ export default function SusuTracker() {
   }
 
   async function persist(nextRaw) {
+    // PAUSE THE TIMER SO IT DOESN'T OVERWRITE US
     if (intervalRef.current) clearInterval(intervalRef.current);
+
     const currentVersion = lastKnownVersion.current;
     const nextVersion = (nextRaw.version || 0) + 1;
     const next = { ...nextRaw, version: nextVersion, updatedAt: new Date().toISOString() };
@@ -420,7 +426,13 @@ export default function SusuTracker() {
         const currentParsed = current.value;
         const dbVersion = currentParsed.version || 0;
 
-       if (dbVersion !== currentVersion) console.warn("Bypassing conflict to allow deletion.");
+        if (dbVersion !== currentVersion) {
+          setNotice({
+            type: "error",
+            text: `⚠️ Conflict detected! Someone else saved changes while you were editing. Please refresh the page to get the latest data, then try again.`
+          });
+          await loadShared();
+          return;
         }
       }
 
@@ -438,11 +450,11 @@ export default function SusuTracker() {
     } catch (e) {
       console.log('Save error:', e);
       setNotice({ type: "error", text: "Could not save. Please try again." });
-    } } finally {
-    // RESTART THE 10-SECOND TIMER NOW THAT THE SAVE IS FINISHED
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(loadShared, 10000);
-    I }
+    } finally {
+      // RESTART THE 10-SECOND TIMER NOW THAT THE SAVE IS FINISHED
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(loadShared, 10000);
+    }
   }
 
   // ============================================
@@ -451,7 +463,6 @@ export default function SusuTracker() {
   function handleAppUnlock() {
     const storedPassword = data.settings?.appPassword || '';
     if (!storedPassword) {
-      // No app password set — allow access
       setAppUnlocked(true);
       sessionStorage.setItem('susu_app_unlocked', 'true');
       setAppPasswordError("");
@@ -493,11 +504,13 @@ export default function SusuTracker() {
       setNotice({ type: "error", text: "View-only mode — you cannot make changes." });
       return;
     }
+    
+    // --- NEW NAME WARNING FEATURE ---
     if (!recorderName) {
-      setEditingName(true);
-      setNotice({ type: "warning", text: "Enter your name at the top first." });
+      setShowNameWarningModal(true);
       return;
     }
+
     if (sessionAuthorized) {
       action();
       return;
@@ -931,6 +944,7 @@ export default function SusuTracker() {
     setEditingName(true);
     setNotice({ type: "warning", text: "Enter your name at the top first." });
     if (nameInputRef.current) nameInputRef.current.focus();
+    setShowNameWarningModal(false);
   }
 
   function setNextOverride(id) {
@@ -1585,9 +1599,9 @@ The user can then re-enable password protection with a new password.
                     placeholder="Your name"
                     value={nameDraft}
                     onChange={(e) => setNameDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { setRecorderName(nameDraft); setEditingName(false); setNotice(null); } }}
+                    onKeyDown={(e) => { if (e.key === "Enter") { setRecorderName(nameDraft); setEditingName(false); setNotice(null); setShowNameWarningModal(false); } }}
                   />
-                  <button style={styles.nameSaveBtn} type="button" onClick={() => { setRecorderName(nameDraft); setEditingName(false); setNotice(null); }}>Set</button>
+                  <button style={styles.nameSaveBtn} type="button" onClick={() => { setRecorderName(nameDraft); setEditingName(false); setNotice(null); setShowNameWarningModal(false); }}>Set</button>
                 </div>
               ) : (
                 <button onClick={() => setEditingName(true)} style={styles.recorderBadge} type="button">
@@ -1597,7 +1611,7 @@ The user can then re-enable password protection with a new password.
             )}
             {data.settings?.requirePassword && (
               <span style={{ fontSize: 11, color: "#F3D48A", background: "#2F6B44", padding: "2px 10px", borderRadius: 999 }}>
-                🔒 Password protected
+                🔒 Password protected (entered once per session)
               </span>
             )}
           </div>
@@ -1701,7 +1715,7 @@ The user can then re-enable password protection with a new password.
         {tab === "overview" && (
           <section>
             {!isViewOnly && (
-              <div style={styles.formRow}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
                 <input
                   style={styles.input}
                   placeholder="Member name"
@@ -1714,6 +1728,14 @@ The user can then re-enable password protection with a new password.
                   <option value="child">Child ($25)</option>
                 </select>
                 <button style={styles.btnPrimary} type="button" onClick={addMember}>Add member</button>
+                
+                {/* --- NEW STATUS FILTER DROPDOWN --- */}
+                <select style={{ ...styles.input, flex: "0 1 160px" }} value={memberFilter} onChange={(e) => setMemberFilter(e.target.value)}>
+                  <option value="all">All Statuses</option>
+                  <option value="green">Current</option>
+                  <option value="yellow">Pending</option>
+                  <option value="red">Late</option>
+                </select>
               </div>
             )}
 
@@ -1744,55 +1766,57 @@ The user can then re-enable password protection with a new password.
                   </tr>
                 </thead>
                 <tbody>
-                  {perMember.map((m) => {
-                    const displayName = isViewOnly ? maskName(m.name) : m.name;
-                    const isAdult = m.type === 'adult';
-                    return (
-                      <tr key={m.id}>
-                        <td style={styles.td} data-label="Member">
-                          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            {!isViewOnly && isAdult && (
-                              <span style={{
-                                display: 'inline-block',
-                                width: 10,
-                                height: 10,
-                                borderRadius: '50%',
-                                background: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'),
-                                flexShrink: 0
-                              }}></span>
-                            )}
-                            {displayName}
-                            {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
-                          </span>
-                        </td>
-                        <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
-                        <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
-                        <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
-                        <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
-
-                        {!isViewOnly && (
-                          <>
-                            <td style={styles.td} data-label="Status">
-                              {isAdult ? (
-                                <span style={{ color: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'), fontWeight: 600 }}>
-                                  {m.statusLabel}
-                                </span>
-                              ) : (
-                                '—'
+                  {perMember
+                    .filter((m) => memberFilter === "all" || m.status === memberFilter)
+                    .map((m) => {
+                      const displayName = isViewOnly ? maskName(m.name) : m.name;
+                      const isAdult = m.type === 'adult';
+                      return (
+                        <tr key={m.id}>
+                          <td style={styles.td} data-label="Member">
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              {!isViewOnly && isAdult && (
+                                <span style={{
+                                  display: 'inline-block',
+                                  width: 10,
+                                  height: 10,
+                                  borderRadius: '50%',
+                                  background: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'),
+                                  flexShrink: 0
+                                }}></span>
                               )}
-                            </td>
-                            <td style={styles.td} data-label="Prepaid">
-                              {isAdult && m.prepaidCount > 0 ? `${m.prepaidCount} month${m.prepaidCount > 1 ? 's' : ''}` : '—'}
-                            </td>
-                            <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
-                            <td style={styles.td}>
-                              <button style={styles.btnGhostSmall} onClick={() => confirmRemove(removeMember, m.name, 'remove member')}>Remove</button>
-                            </td>
-                          </>
-                        )}
-                      </tr>
-                    );
-                  })}
+                              {displayName}
+                              {nextRecipient && nextRecipient.id === m.id && <span style={styles.nextTag}>next</span>}
+                            </span>
+                          </td>
+                          <td style={styles.td} data-label="Type">{m.type === 'child' ? 'Child ($25)' : 'Adult ($50)'}</td>
+                          <td style={styles.td} data-label="Contributed">{fmt(m.contributed)}</td>
+                          <td style={styles.td} data-label="Received">{fmt(m.received)}</td>
+                          <td style={styles.td} data-label="EF Balance">{fmt(m.efBalance)}</td>
+
+                          {!isViewOnly && (
+                            <>
+                              <td style={styles.td} data-label="Status">
+                                {isAdult ? (
+                                  <span style={{ color: m.status === 'green' ? '#2E7D32' : (m.status === 'yellow' ? '#F9A825' : '#C62828'), fontWeight: 600 }}>
+                                    {m.statusLabel}
+                                  </span>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td style={styles.td} data-label="Prepaid">
+                                {isAdult && m.prepaidCount > 0 ? `${m.prepaidCount} month${m.prepaidCount > 1 ? 's' : ''}` : '—'}
+                              </td>
+                              <td style={styles.td} data-label="Recorded By">{m.recordedBy ? `Recorded By ${m.recordedBy}` : "—"}</td>
+                              <td style={styles.td}>
+                                <button style={styles.btnGhostSmall} onClick={() => confirmRemove((justification) => removeMember(m.id, justification), m.name, 'remove member')}>Remove</button>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             )}
@@ -1852,7 +1876,7 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td}>
                         <button style={styles.btnGhostSmall} onClick={() => {
                           const memberName = memberById[c.memberId]?.name || 'this contribution';
-                          confirmRemove(removeContribution, memberName, 'remove contribution');
+                          confirmRemove((justification) => removeContribution(c.id, justification), memberName, 'remove contribution');
                         }}>Remove</button>
                       </td>
                     </tr>
@@ -1917,7 +1941,7 @@ The user can then re-enable password protection with a new password.
                       <td style={styles.td}>
                         <button style={styles.btnGhostSmall} onClick={() => {
                           const memberName = memberById[p.memberId]?.name || 'this payout';
-                          confirmRemove(removePayout, memberName, 'remove payout');
+                          confirmRemove((justification) => removePayout(p.id, justification), memberName, 'remove payout');
                         }}>Remove</button>
                       </td>
                     </tr>
@@ -2025,7 +2049,7 @@ The user can then re-enable password protection with a new password.
                             )}
                             <button style={styles.btnGhostSmall} onClick={() => {
                               const memberName = w.memberId ? (memberById[w.memberId]?.name || 'this EF withdrawal') : 'this general fund withdrawal';
-                              confirmRemove(removeWithdrawal, memberName, 'remove EF withdrawal');
+                              confirmRemove((justification) => removeWithdrawal(w.id, justification), memberName, 'remove EF withdrawal');
                             }}>Remove</button>
                           </td>
                         </tr>
@@ -2066,7 +2090,7 @@ The user can then re-enable password protection with a new password.
                             <td style={styles.td} data-label="Justification">{t.reason}</td>
                             <td style={styles.td} data-label="Recorded By">{t.recordedBy || '—'}</td>
                             <td style={styles.td}>
-                              <button style={styles.btnGhostSmall} onClick={() => confirmRemove(removeTransfer, 'transfer', 'remove transfer')}>Remove</button>
+                              <button style={styles.btnGhostSmall} onClick={() => confirmRemove((justification) => removeTransfer(t.id, justification), 'transfer', 'remove transfer')}>Remove</button>
                             </td>
                           </tr>
                         ))}
@@ -2515,6 +2539,26 @@ The user can then re-enable password protection with a new password.
             <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
               <button style={styles.btnPrimary} onClick={executeConfirmedAction}>Confirm</button>
               <button style={styles.btnGhostSmall} onClick={cancelConfirmModal}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== NEW NAME WARNING MODAL ===== */}
+      {showNameWarningModal && (
+        <div style={styles.modalOverlay}>
+          <div style={{ ...styles.modal, maxWidth: "500px", border: "2px solid #C62828" }}>
+            <h3 style={{ marginTop: 0, color: "#C62828", display: "flex", alignItems: "center", gap: 8 }}>
+              ⚠️ Name Not Set
+            </h3>
+            <p style={{ fontSize: 15, lineHeight: "1.5" }}>
+              You cannot make changes to the ledger without setting your name first.
+            </p>
+            <p style={{ fontSize: 13, color: "#5F5E5A", marginBottom: 16 }}>
+              Click the <strong>"Set Your Name"</strong> button below and type your name at the top right of the screen to continue.
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button style={styles.btnPrimary} onClick={requireName}>Set Your Name</button>
             </div>
           </div>
         </div>
