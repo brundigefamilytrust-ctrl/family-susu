@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 // ============================================
-// SUPABASE CONFIG
+// SUPABASE CONFIG (CORRECTED WITH YOUR EXACT KEYS)
 // ============================================
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://rgolcprnbzrqleurebah.supabase.co";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb2xjcHJuYnpycWxldXJlYmFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMzNjcwNDUsImV4cCI6MjA5ODk0MzA0NX0.PQfamuJYqcm1LWFSv_yhib8anMe4QUWzETwNJ35FBaA";
@@ -2589,6 +2589,15 @@ table { border-collapse: collapse; width: 100%; }
 `;
 
 const styles = {
+  appUnlockModal: {
+    background: "#123B22",
+    padding: "32px",
+    borderRadius: "16px",
+    border: "1px solid #2F6B44",
+    maxWidth: "400px",
+    width: "90%",
+    boxShadow: "0 8px 32px rgba(0,0,0,0.5)"
+  },
   loadingWrap: { background: "#123B22", padding: "3rem", borderRadius: 12, textAlign: "center" },
   app: { fontFamily: "var(--body)", background: "#FBF7EC", borderRadius: 12, overflow: "hidden", border: "1px solid #E4DBC4" },
   hero: {
