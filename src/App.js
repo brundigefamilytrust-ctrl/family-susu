@@ -1667,7 +1667,7 @@ The user can then re-enable password protection with a new password.
           </div>
           <div style={styles.statCol}>
             <div style={styles.statCard}>
-              <p style={styles.statLabel}>Total collected</p>
+              <p style={styles.statLabel}>Lifetime Total collected</p>
               <p style={styles.statValue}>{fmt(totals.totalCollected)}</p>
             </div>
             <div style={styles.statCard}>
@@ -1682,6 +1682,10 @@ The user can then re-enable password protection with a new password.
               <p style={styles.statLabel}>Emergency fund balance</p>
               <p style={styles.statValue}>{fmt(totals.efBalance)}</p>
             </div>
+            <div style={styles.statCardAccent}>
+              <p style={styles.statLabelAccent}>Total Account Balance</p>
+              <p style={styles.statValueAccent}>{fmt(totals.potBalance + totals.efBalance)}</p>
+          </div>
           </div>
         </div>
       </header>
